@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}{{ ticker }} · PricedIn{% endblock %}
+{% block content %}
+  {% if error %}<p class="notice">{{ error }}</p>{% endif %}
+
+  {% if state == "unknown_ticker" %}
+    <h1>{{ ticker }}</h1>
+    <p>No SEC filer found for this ticker.</p>
+
+  {% elif state == "not_fetched" %}
+    <h1>{{ ticker }}</h1>
+    <p>No SEC data cached yet.</p>
+    <form method="post" action="{{ url_for('refresh', ticker=ticker) }}">
+      <button {% if ua_error %}disabled{% endif %}>Fetch from SEC</button>
+    </form>
+
+  {% else %}
+    <h1>{{ name }} <span class="muted">{{ ticker }} · CIK {{ cik }}</span></h1>
+    <form method="post" action="{{ url_for('refresh', ticker=ticker) }}">
+      <span class="muted">SEC data fetched {{ fetched_at }}</span>
+      <button {% if ua_error %}disabled{% endif %}>Refresh</button>
+    </form>
+
+    <h2>Revenue</h2>
+    <div id="revenue" class="chart"></div>
+    <h2>Operating margin</h2>
+    <div id="operating_margin" class="chart"></div>
+    <h2>Free cash flow <span class="muted">(operating cash flow minus capex; SBC not deducted)</span></h2>
+    <div id="fcf" class="chart"></div>
+
+    {% if conflicts %}
+      <h2>Tag conflicts</h2>
+      <p class="muted">Two tags in a concept's chain disagree for the same year. The first tag in the chain was used.</p>
+      <table>
+        <tr><th>Concept</th><th>Year end</th><th>Used</th><th>Other</th></tr>
+        {% for c in conflicts %}
+          <tr>
+            <td>{{ c.concept }}</td>
+            <td>{{ c.period.end }}</td>
+            <td>{{ c.chosen.source_tag }}: {{ "{:,.0f}".format(c.chosen.value) }}</td>
+            <td>{{ c.other.source_tag }}: {{ "{:,.0f}".format(c.other.value) }}</td>
+          </tr>
+        {% endfor %}
+      </table>
+    {% endif %}
+
+    <script src="{{ url_for('static', filename='vendor/echarts.min.js') }}"></script>
+    <script>
+      const charts = {{ charts | tojson }};
+      const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+      const fmt = {
+        usd: v => "$" + (v / 1e9).toFixed(1) + "B",
+        pct: v => (v * 100).toFixed(1) + "%",
+      };
+      function render(id, type, format) {
+        const points = charts[id];
+        const chart = echarts.init(document.getElementById(id), dark ? "dark" : null);
+        chart.setOption({
+          backgroundColor: "transparent",
+          grid: { left: 64, right: 16, top: 16, bottom: 32 },
+          tooltip: {
+            trigger: "axis",
+            formatter: items => {
+              const p = points[items[0].dataIndex];
+              return `<b>${p.label}</b> (ends ${p.end}): ${fmt[format](p.value)}<br>`
+                + p.sources.map(s => `<span style="font-size:12px">${s}</span>`).join("<br>");
+            },
+          },
+          xAxis: { type: "category", data: points.map(p => p.label) },
+          yAxis: { type: "value", axisLabel: { formatter: fmt[format] } },
+          series: [{ type, data: points.map(p => p.value), smooth: false }],
+        });
+        addEventListener("resize", () => chart.resize());
+      }
+      render("revenue", "bar", "usd");
+      render("operating_margin", "line", "pct");
+      render("fcf", "bar", "usd");
+    </script>
+  {% endif %}
+{% endblock %}

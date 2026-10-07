@@ -2,113 +2,254 @@ import json
 from datetime import date
 
 from pricedin.normalize import edgar
-from pricedin.normalize.schema import Period
 
-FY2023 = Period(date(2023, 1, 1), date(2023, 12, 31))
-FY2024 = Period(date(2024, 1, 1), date(2024, 12, 31))
-
-
-def entry(val, start, end, form, filed, accn="0000000000-00-000000"):
-    return {"val": val, "start": start, "end": end, "form": form, "filed": filed, "accn": accn}
+Y2019, Y2020 = date(2019, 12, 31), date(2020, 12, 31)
+Y2021, Y2022 = date(2021, 12, 31), date(2022, 12, 31)
+Y2023, Y2024 = date(2023, 12, 31), date(2024, 12, 31)
 
 
-def companyfacts(tags: dict[str, list[dict]]) -> bytes:
+def entry(val, year, form="10-K", filed=None, accn="a", start=None, end=None, fy=None):
+    """A full calendar-year fact. `filed` defaults to early the following year."""
+    return {
+        "val": val,
+        "start": start or f"{year}-01-01",
+        "end": end or f"{year}-12-31",
+        "form": form,
+        "filed": filed or f"{year + 1}-02-01",
+        "accn": accn,
+        "fy": fy,
+    }
+
+
+def companyfacts(tags: dict[str, list[dict]], cik=1) -> bytes:
     facts = {tag: {"units": {"USD": entries}} for tag, entries in tags.items()}
-    return json.dumps({"cik": 1, "entityName": "Test Co", "facts": {"us-gaap": facts}}).encode()
+    return json.dumps({"cik": cik, "entityName": "Test Co", "facts": {"us-gaap": facts}}).encode()
 
 
-def revenue(tags: dict[str, list[dict]]):
-    return edgar.statements(companyfacts(tags)).series("revenue")
+def resolve(tags, **kwargs):
+    return edgar.statements(companyfacts(tags), **kwargs)
 
 
 def test_latest_restated_value_wins():
-    rev = revenue(
-        {
-            "Revenues": [
-                entry(100, "2023-01-01", "2023-12-31", "10-K", "2024-02-01", "a"),
-                entry(95, "2023-01-01", "2023-12-31", "10-K", "2025-02-01", "b"),  # restated
-            ]
-        }
-    )
-    assert rev[FY2023].value == 95
+    s = resolve({"Revenues": [entry(100, 2023), entry(95, 2023, filed="2025-02-01", accn="b")]})
+    assert s.series("revenue")[Y2023].value == 95
 
 
 def test_newer_filing_beats_higher_ranked_tag():
-    # The old filing used the chain's first tag; the restated value sits under a later tag.
-    rev = revenue(
+    s = resolve(
         {
-            "Revenues": [entry(100, "2023-01-01", "2023-12-31", "10-K", "2024-02-01", "a")],
+            "Revenues": [entry(100, 2023)],
             "RevenueFromContractWithCustomerExcludingAssessedTax": [
-                entry(95, "2023-01-01", "2023-12-31", "10-K", "2025-02-01", "b")
+                entry(95, 2023, filed="2025-02-01", accn="b"),
+                entry(99, 2024, accn="b"),
             ],
         }
     )
-    assert rev[FY2023].value == 95
+    assert s.series("revenue")[Y2023].value == 95
 
 
-def test_quarters_and_non_annual_forms_are_ignored():
-    rev = revenue(
+def test_quarters_proxy_statements_and_8k_recasts_are_ignored():
+    s = resolve(
         {
-            "Revenues": [
-                entry(25, "2024-10-01", "2024-12-31", "10-K", "2025-02-01"),  # Q4 in a 10-K
-                entry(90, "2024-01-01", "2024-12-31", "8-K", "2025-03-01"),  # 8-K recast
-                entry(100, "2024-01-01", "2024-12-31", "10-K", "2025-02-01"),
-            ]
+            "Revenues": [entry(100, 2024)],
+            "NetIncomeLoss": [
+                entry(10, 2024),
+                entry(25, 2024, start="2024-10-01"),  # Q4 inside the 10-K
+                entry(11, 2024, form="DEF 14A", filed="2025-04-01", accn="p"),
+                entry(12, 2024, form="8-K", filed="2025-03-01", accn="r"),
+            ],
         }
     )
-    assert list(rev) == [FY2024]
-    assert rev[FY2024].value == 100
+    assert s.series("net_income")[Y2024].value == 10
 
 
 def test_amended_10k_counts():
-    rev = revenue(
+    s = resolve({"Revenues": [entry(100, 2024), entry(101, 2024, "10-K/A", "2025-04-01", "b")]})
+    assert s.series("revenue")[Y2024].value == 101
+
+
+def test_future_dated_facts_are_dropped():
+    s = resolve({"Revenues": [entry(100, 2024), entry(500, 2025, filed="2025-02-01", accn="x")]})
+    assert list(s.series("revenue")) == [Y2024]
+
+
+def test_years_are_identified_by_end_date():
+    # Some filings start the year on Dec 31 instead of Jan 1 (NEE).
+    s = resolve(
         {
             "Revenues": [
-                entry(100, "2024-01-01", "2024-12-31", "10-K", "2025-02-01", "a"),
-                entry(101, "2024-01-01", "2024-12-31", "10-K/A", "2025-04-01", "b"),
+                entry(100, 2010, start="2009-12-31", filed="2011-02-01", accn="a"),
+                entry(98, 2010, filed="2012-02-01", accn="b"),
+                entry(105, 2011, filed="2012-02-01", accn="b"),
             ]
         }
     )
-    assert rev[FY2024].value == 101
+    assert list(s.series("revenue")) == [date(2010, 12, 31), date(2011, 12, 31)]
+    assert s.series("revenue")[date(2010, 12, 31)].value == 98
+
+
+def test_values_older_than_a_filings_last_three_years_are_ignored():
+    # The 2025 10-K also tags 2021 in a five-year summary; only its last 3 years count.
+    s = resolve(
+        {
+            "Revenues": [
+                entry(100, 2021, accn="a"),
+                entry(999, 2021, filed="2026-02-01", accn="c"),
+                entry(140, 2025, filed="2026-02-01", accn="c"),
+            ]
+        }
+    )
+    assert s.series("revenue")[Y2021].value == 100
+
+
+def test_recast_break_is_detected():
+    # The 2024 10-K recasts 2023 after a spin-off; 2022 stays on the old basis.
+    s = resolve(
+        {
+            "Revenues": [
+                entry(100, 2022, filed="2024-02-01", accn="a"),
+                entry(110, 2023, filed="2024-02-01", accn="a"),
+                entry(80, 2023, filed="2025-02-01", accn="b"),
+                entry(90, 2024, filed="2025-02-01", accn="b"),
+            ]
+        }
+    )
+    [brk] = s.breaks
+    assert (brk.prev_end, brk.end) == (Y2022, Y2023)
+    assert (brk.before.value, brk.after.value) == (110, 80)
+
+
+def test_small_restatements_are_not_breaks():
+    s = resolve(
+        {
+            "Revenues": [
+                entry(100, 2022, filed="2024-02-01", accn="a"),
+                entry(1000, 2023, filed="2024-02-01", accn="a"),
+                entry(1001, 2023, filed="2025-02-01", accn="b"),
+            ]
+        }
+    )
+    assert s.breaks == []
+
+
+def test_stale_value_is_flagged_with_hints():
+    # The newer 10-K restates 2019 revenue under a tag outside the chain.
+    s = resolve(
+        {
+            "Revenues": [entry(100, 2019, accn="a")],
+            "RevenuesNetOfInterestExpense": [
+                entry(102, 2019, filed="2021-02-01", accn="b"),
+                entry(110, 2020, accn="b"),
+            ],
+            "NetIncomeLoss": [
+                entry(10, 2019, accn="a"),
+                entry(10, 2019, filed="2021-02-01", accn="b"),
+                entry(12, 2020, accn="b"),
+            ],
+        }
+    )
+    assert s.series("revenue")[Y2019].value == 100
+    [stale] = [x for x in s.stale if x.concept == "revenue"]
+    assert stale.newer_accession == "b"
+    assert ("RevenuesNetOfInterestExpense", 102.0) in stale.hints
+
+
+def test_contract_revenue_flagged_when_other_revenue_reported():
+    s = resolve(
+        {
+            "RevenueFromContractWithCustomerExcludingAssessedTax": [entry(90, 2024)],
+            "RevenueNotFromContractWithCustomer": [entry(10, 2024)],
+        }
+    )
+    [flag] = s.flags
+    assert (flag.concept, flag.end) == ("revenue", Y2024)
+
+
+def test_disagreeing_tags_in_one_filing_are_conflicts():
+    s = resolve(
+        {
+            "Revenues": [entry(100, 2024)],
+            "RevenueFromContractWithCustomerExcludingAssessedTax": [entry(97, 2024)],
+        }
+    )
+    assert s.series("revenue")[Y2024].value == 100
+    [conflict] = s.conflicts
+    assert conflict.other.value == 97
+    assert round(conflict.gap, 2) == -0.03
 
 
 def test_restatement_across_filings_is_not_a_conflict():
-    body = companyfacts(
+    s = resolve(
         {
-            "Revenues": [entry(100, "2023-01-01", "2023-12-31", "10-K", "2024-02-01", "a")],
+            "Revenues": [entry(100, 2023)],
             "RevenueFromContractWithCustomerExcludingAssessedTax": [
-                entry(95, "2023-01-01", "2023-12-31", "10-K", "2025-02-01", "b")
+                entry(95, 2023, filed="2025-02-01", accn="b")
             ],
         }
     )
-    assert edgar.statements(body).conflicts == []
+    assert s.conflicts == []
 
 
-def test_chain_falls_back_per_period():
-    body = companyfacts(
+def test_continuing_operations_cash_flow_comes_first():
+    s = resolve(
         {
-            "SalesRevenueNet": [entry(80, "2023-01-01", "2023-12-31", "10-K", "2024-02-01")],
-            "Revenues": [entry(100, "2024-01-01", "2024-12-31", "10-K", "2025-02-01")],
+            "NetCashProvidedByUsedInOperatingActivities": [entry(5189, 2023)],
+            "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations": [entry(4609, 2023)],
         }
     )
-    revenue = edgar.statements(body).series("revenue")
-    assert revenue[FY2023].source_tag == "SalesRevenueNet"
-    assert revenue[FY2024].source_tag == "Revenues"
+    assert s.series("operating_cash_flow")[Y2023].value == 4609
 
 
-def test_disagreeing_tags_are_recorded_as_conflicts():
-    body = companyfacts(
+def test_labels_follow_start_year_naming():
+    # Target: the year ending 2026-01-31 is "fiscal 2025".
+    s = resolve(
         {
-            "Revenues": [entry(100, "2024-01-01", "2024-12-31", "10-K", "2025-02-01")],
-            "RevenueFromContractWithCustomerExcludingAssessedTax": [
-                entry(97, "2024-01-01", "2024-12-31", "10-K", "2025-02-01")
-            ],
+            "Revenues": [
+                entry(
+                    100, 2024, start="2024-02-04", end="2025-02-01", filed="2026-03-01", accn="t"
+                ),
+                entry(
+                    110,
+                    2025,
+                    start="2025-02-02",
+                    end="2026-01-31",
+                    filed="2026-03-01",
+                    accn="t",
+                    fy=2025,
+                ),
+            ]
         }
     )
-    stmts = edgar.statements(body)
-    assert stmts.series("revenue")[FY2024].value == 100
-    [conflict] = stmts.conflicts
-    assert conflict.other.value == 97
+    assert s.label(date(2025, 2, 1)) == "FY2024"
+    assert s.label(date(2026, 1, 31)) == "FY2025"
+
+
+def test_labels_follow_end_year_naming():
+    # Walmart: the year ending 2026-01-31 is "fiscal 2026".
+    s = resolve(
+        {
+            "Revenues": [
+                entry(
+                    110,
+                    2025,
+                    start="2025-02-01",
+                    end="2026-01-31",
+                    filed="2026-03-01",
+                    accn="w",
+                    fy=2026,
+                ),
+            ]
+        }
+    )
+    assert s.label(date(2026, 1, 31)) == "FY2026"
+    assert s.label(date(2025, 1, 31)) == "FY2025"
+
+
+def test_predecessor_history_is_pooled():
+    primary = companyfacts({"Revenues": [entry(200, 2016, accn="new")]}, cik=1)
+    older = companyfacts({"Revenues": [entry(150, 2013, accn="old")]}, cik=2)
+    revenue = edgar.statements(primary, predecessors=[older]).series("revenue")
+    assert [f.cik for f in revenue.values()] == [2, 1]
 
 
 def test_ticker_index():

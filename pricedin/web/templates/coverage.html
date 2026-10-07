@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}{{ ticker }} coverage · PricedIn{% endblock %}
+{% block content %}
+  {% set s = co.stmts %}
+  <h1>{{ co.name }} <span class="muted">{{ ticker }} · CIK {{ co.cik }}</span></h1>
+  <p>
+    <a href="{{ url_for('company', ticker=ticker) }}">Charts</a> ·
+    <span class="muted">SEC data fetched {{ co.fetched_at }} ·
+      {% if co.scope %}SIC {{ co.scope.sic }} {{ co.scope.sic_description }} · {{ co.scope.status }}{% if co.scope.category %} ({{ co.scope.category }}){% endif %} ·{% endif %}
+      taxonomies: {% for name, n in co.taxonomies.items() %}{{ name }} ({{ n }}){% if not loop.last %}, {% endif %}{% endfor %}
+    </span>
+  </p>
+  {% for p in co.predecessors %}
+    <p class="muted">Pooled with predecessor {{ p.name }} (CIK {{ p.cik }}), succeeded {{ p.effective }}: {{ p.note }}</p>
+  {% endfor %}
+  {% for sig in co.signals %}<p class="notice">Possible predecessor: {{ sig }}</p>{% endfor %}
+
+  <p class="muted">Annual values in $ millions. Each year comes from the newest 10-K or 10-K/A
+    that shows it in its last three fiscal years. Hover a cell for its tag and filing.
+    <span class="key stale"></span> = a newer 10-K reports the year under a tag outside the chain.</p>
+
+  <div style="overflow-x: auto">
+  <table class="coverage">
+    <tr>
+      <th>Year</th><th>Ends</th><th>Days</th>
+      {% for c in concepts %}<th title="{{ chains[c] | join(' → ') }}">{{ c | replace('_', ' ') }}</th>{% endfor %}
+    </tr>
+    {% for end, label, cells in rows %}
+      <tr>
+        <td>{{ label }}</td>
+        <td>{{ end }}</td>
+        {% set days = (cells | select | first).period.days %}
+        <td class="{{ 'odd' if days not in (363, 364, 365) else '' }}">{{ days }}</td>
+        {% for f in cells %}
+          {% if f %}
+            <td class="num {{ 'stale' if (f.concept, end) in stale else '' }}"
+                title="{{ f.source_tag }}&#10;{{ f.form }} filed {{ f.filed }}&#10;accn {{ f.accession }}{% if f.cik != co.cik %}&#10;predecessor CIK {{ f.cik }}{% endif %}">
+              {{ "{:,.0f}".format(f.value / 1e6) }}
+              {% if f.source_tag != chains[f.concept][0] %}<sup class="alt" title="fallback tag: {{ f.source_tag }}">alt</sup>{% endif %}
+            </td>
+          {% else %}
+            <td class="gap">–</td>
+          {% endif %}
+        {% endfor %}
+      </tr>
+    {% endfor %}
+  </table>
+  </div>
+
+  {% if not rows %}<p class="notice">No canonical line items resolved. The filer may not use us-gaap tags (see taxonomies above).</p>{% endif %}
+
+  {% if s.breaks %}
+    <h2>Basis changes</h2>
+    <p class="muted">A later 10-K restated a year by more than 0.5%, so the year before it is on a different basis.</p>
+    <table>
+      <tr><th>Concept</th><th>Between</th><th>Restated</th><th>Change</th><th>Filings</th></tr>
+      {% for b in s.breaks %}
+        <tr>
+          <td>{{ b.concept | replace('_', ' ') }}</td>
+          <td>{{ s.label(b.prev_end) }} → {{ s.label(b.end) }}</td>
+          <td>{{ usd(b.before.value) }} → {{ usd(b.after.value) }}</td>
+          <td class="num">{{ "{:+.1%}".format(b.change) }}</td>
+          <td class="muted">{{ b.before.accession }} → {{ b.after.accession }}</td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% endif %}
+
+  {% if s.stale %}
+    <h2>Possibly outdated values</h2>
+    <table>
+      <tr><th>Concept</th><th>Year</th><th>Shown (filed)</th><th>Newer 10-K</th><th>Related tags in it</th></tr>
+      {% for x in s.stale %}
+        <tr>
+          <td>{{ x.concept | replace('_', ' ') }}</td><td>{{ s.label(x.end) }}</td>
+          <td>{{ usd(x.used.value) }} ({{ x.used.filed }})</td>
+          <td>{{ x.newer_accession }} ({{ x.newer_filed }})</td>
+          <td>{% for tag, v in x.hints %}<code>{{ tag }}</code> = {{ usd(v) }}{% if not loop.last %}<br>{% endif %}{% else %}<span class="muted">none found</span>{% endfor %}</td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% endif %}
+
+  {% if s.flags %}
+    <h2>Flags</h2>
+    <ul>{% for f in s.flags %}<li>{{ s.label(f.end) }} {{ f.concept | replace('_', ' ') }}: {{ f.message }}</li>{% endfor %}</ul>
+  {% endif %}
+
+  <h2>Tag chains</h2>
+  <table>
+    {% for c in concepts %}<tr><td>{{ c | replace('_', ' ') }}</td><td><code>{{ chains[c] | join(' → ') }}</code></td></tr>{% endfor %}
+  </table>
+
+  {% if conflicts %}
+    <h2>Tag conflicts</h2>
+    <p class="muted">Two chain tags in the same filing disagree; the first in the chain was used. Sorted by gap. Small gaps between a total and a subtotal (e.g. total revenue vs net sales) are expected.</p>
+    <table>
+      <tr><th>Concept</th><th>Year</th><th>Used</th><th>Other</th><th>Gap</th></tr>
+      {% for c in conflicts %}
+        <tr>
+          <td>{{ c.concept | replace('_', ' ') }}</td><td>{{ s.label(c.end) }}</td>
+          <td>{{ c.chosen.source_tag }}: {{ usd(c.chosen.value) }}</td>
+          <td>{{ c.other.source_tag }}: {{ usd(c.other.value) }}</td>
+          <td class="num">{% if c.gap is not none %}{{ "{:+.1%}".format(c.gap) }}{% endif %}</td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% endif %}
+{% endblock %}

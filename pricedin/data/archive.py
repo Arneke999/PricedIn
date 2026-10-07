@@ -48,5 +48,18 @@ def latest(kind: str) -> tuple[bytes, dict] | None:
     return (folder / f"{entry['sha256']}.json").read_bytes(), entry
 
 
+def entries(kind: str) -> list[dict]:
+    """Every manifest entry for a kind, oldest first."""
+    manifest = path_for(kind) / MANIFEST
+    if not manifest.exists():
+        return []
+    return [json.loads(line) for line in manifest.read_text().splitlines() if line]
+
+
+def body(kind: str, entry: dict) -> bytes:
+    """The archived body a manifest entry points to."""
+    return (path_for(kind) / f"{entry['sha256']}.json").read_bytes()
+
+
 def path_for(kind: str) -> Path:
     return config.raw_dir() / kind

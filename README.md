@@ -15,7 +15,8 @@ says so. Not investment advice.
 
 **NixOS:** generic Linux binaries from PyPI (ruff now, DuckDB later) don't run without
 `programs.nix-ld.enable = true;` in your system configuration. Pure-Python packages work
-either way.
+either way. If fetching fails with `CERTIFICATE_VERIFY_FAILED`, uv's Python can't find the
+system CA bundle: set `SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt` in `.env`.
 
 ## Setup
 

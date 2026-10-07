@@ -6,16 +6,19 @@ Phase 0a skeleton: no golden test yet, so these render only under the page-wide
 
 from __future__ import annotations
 
-from pricedin.normalize.schema import Fact, Period
+from datetime import date
+
+from pricedin.normalize.schema import Fact
 
 
 def free_cash_flow(
-    operating_cash_flow: dict[Period, Fact], capex: dict[Period, Fact]
-) -> dict[Period, float]:
-    """Operating cash flow minus capital expenditure.
+    operating_cash_flow: dict[date, Fact], capex: dict[date, Fact]
+) -> dict[date, float]:
+    """Operating cash flow (continuing operations first, DECISIONS #34) minus capital
+    expenditure.
 
     SBC is not deducted. Whether and how to deduct it is still Arne's open decision.
     capex is reported as a positive payment, so it is subtracted.
     """
-    periods = sorted(operating_cash_flow.keys() & capex.keys())
-    return {p: operating_cash_flow[p].value - capex[p].value for p in periods}
+    ends = sorted(operating_cash_flow.keys() & capex.keys())
+    return {e: operating_cash_flow[e].value - capex[e].value for e in ends}

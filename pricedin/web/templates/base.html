@@ -20,6 +20,16 @@
     table { border-collapse: collapse; width: 100%; font-size: 14px; }
     th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); }
     input, button { font: inherit; padding: 4px 10px; }
+    a { color: inherit; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    td.gap { text-align: center; color: var(--warn); background: var(--warn-bg); }
+    td.odd { color: var(--warn); }
+    sup.alt { color: var(--muted); font-size: 10px; }
+    table.coverage td, table.coverage th { white-space: nowrap; }
+    td.stale { background: var(--warn-bg); color: var(--warn); }
+    ul.warnings { background: var(--warn-bg); color: var(--warn); padding: 8px 12px 8px 28px; border-radius: 6px; font-size: 14px; }
+    .key { display: inline-block; width: 10px; height: 10px; vertical-align: middle; }
+    .key.stale { background: var(--warn); }
   </style>
 </head>
 <body>

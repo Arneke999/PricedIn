@@ -1,29 +1,54 @@
 """Ordered XBRL tag fallback chains per canonical concept.
 
-For each period, the first tag in the chain that has a value wins. Later tags that
-report a different value for the same period are recorded as conflicts.
-
-PROVISIONAL (Phase 0a skeleton). The fallback order for every concept is Arne's decision
-(CLAUDE.md) and these orders are not yet approved. The revenue chain is the one from the
-original roadmap; the others are the obvious us-gaap tags. Phase 1 replaces this file with
-chains seeded from edgartools' gaap_mappings.json (MIT).
+Approved by Arne after the Phase 0b spike (DECISIONS #31-#34). For each fiscal year the
+newest filing wins, then the first tag in the chain that the filing reports. Changing an
+order is Arne's decision. edgartools' MIT gaap_mappings.json is a reading reference when
+extending a chain.
 """
 
 CHAINS: dict[str, tuple[str, ...]] = {
     "revenue": (
         "Revenues",
+        "RegulatedAndUnregulatedOperatingRevenue",
         "RevenueFromContractWithCustomerExcludingAssessedTax",
         "RevenueFromContractWithCustomerIncludingAssessedTax",
         "SalesRevenueNet",
-        "SalesRevenueGoodsNet",
     ),
-    "operating_income": ("OperatingIncomeLoss",),
+    "operating_income": (
+        "OperatingIncomeLoss",
+        # EBIT, for filers that present it instead of operating income (Target)
+        "IncomeLossFromContinuingOperationsBeforeInterestExpenseInterestIncomeIncomeTaxesExtraordinaryItemsNoncontrollingInterestsNet",
+    ),
+    "net_income": (
+        "NetIncomeLoss",
+        "NetIncomeLossAvailableToCommonStockholdersBasic",
+        "ProfitLoss",
+    ),
     "operating_cash_flow": (
-        "NetCashProvidedByUsedInOperatingActivities",
         "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations",
+        "NetCashProvidedByUsedInOperatingActivities",
     ),
     "capex": (
         "PaymentsToAcquirePropertyPlantAndEquipment",
         "PaymentsToAcquireProductiveAssets",
     ),
+}
+
+# ASC 606 contract revenue can exclude lease, interest or insurance income. When the
+# filing also reports this tag, contract revenue is likely a subset of the total.
+NON_CONTRACT_REVENUE = "RevenueNotFromContractWithCustomer"
+CONTRACT_REVENUE = frozenset(
+    {
+        "RevenueFromContractWithCustomerExcludingAssessedTax",
+        "RevenueFromContractWithCustomerIncludingAssessedTax",
+    }
+)
+
+# Name fragments used to suggest which tag a newer filing used instead (stale values).
+HINTS: dict[str, tuple[str, ...]] = {
+    "revenue": ("Revenue", "Sales"),
+    "operating_income": ("OperatingIncome", "BeforeInterest"),
+    "net_income": ("NetIncome", "ProfitLoss"),
+    "operating_cash_flow": ("OperatingActivities",),
+    "capex": ("PaymentsToAcquire",),
 }

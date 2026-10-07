@@ -8,67 +8,97 @@
     <p>No SEC filer found for this ticker.</p>
 
   {% elif state == "not_fetched" %}
-    <h1>{{ ticker }}</h1>
+    <h1>{{ co.name or ticker }}</h1>
     <p>No SEC data cached yet.</p>
     <form method="post" action="{{ url_for('refresh', ticker=ticker) }}">
       <button {% if ua_error %}disabled{% endif %}>Fetch from SEC</button>
     </form>
 
   {% else %}
-    <h1>{{ name }} <span class="muted">{{ ticker }} · CIK {{ cik }}</span></h1>
+    <h1>{{ co.name }} <span class="muted">{{ ticker }} · CIK {{ co.cik }}{% if co.scope and co.scope.sic_description %} · {{ co.scope.sic_description | title }}{% endif %}</span></h1>
     <form method="post" action="{{ url_for('refresh', ticker=ticker) }}">
-      <span class="muted">SEC data fetched {{ fetched_at }}</span>
+      <a href="{{ url_for('coverage', ticker=ticker) }}">Coverage</a> ·
+      <span class="muted">SEC data fetched {{ co.fetched_at }}</span>
       <button {% if ua_error %}disabled{% endif %}>Refresh</button>
     </form>
 
-    <h2>Revenue</h2>
-    <div id="revenue" class="chart"></div>
-    <h2>Operating margin</h2>
-    <div id="operating_margin" class="chart"></div>
-    <h2>Free cash flow <span class="muted">(operating cash flow minus capex; SBC not deducted)</span></h2>
-    <div id="fcf" class="chart"></div>
+    {% for p in co.predecessors %}
+      <p class="muted">Years before {{ p.effective }} come from the predecessor {{ p.name }}
+        (CIK {{ p.cik }}). {{ p.note }}</p>
+    {% endfor %}
+    {% for s in co.signals %}<p class="notice">Possible predecessor: {{ s }}</p>{% endfor %}
 
-    {% if conflicts %}
-      <h2>Tag conflicts</h2>
-      <p class="muted">Two tags in a concept's chain disagree for the same year. The first tag in the chain was used.</p>
-      <table>
-        <tr><th>Concept</th><th>Year end</th><th>Used</th><th>Other</th></tr>
-        {% for c in conflicts %}
-          <tr>
-            <td>{{ c.concept }}</td>
-            <td>{{ c.period.end }}</td>
-            <td>{{ c.chosen.source_tag }}: {{ "{:,.0f}".format(c.chosen.value) }}</td>
-            <td>{{ c.other.source_tag }}: {{ "{:,.0f}".format(c.other.value) }}</td>
-          </tr>
-        {% endfor %}
-      </table>
+    {% if state == "excluded" %}
+      <p class="notice">{{ co.scope.message }}</p>
+      <p class="muted">The <a href="{{ url_for('coverage', ticker=ticker) }}">coverage page</a>
+        still shows the raw line items, for reference.</p>
+    {% else %}
+
+    {% macro chart(id, title, note=None) %}
+      <h2>{{ title }}{% if note %} <span class="muted">{{ note }}</span>{% endif %}</h2>
+      {% if charts[id].warnings %}
+        <ul class="warnings">{% for w in charts[id].warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+      {% endif %}
+      <div id="{{ id }}" class="chart"></div>
+    {% endmacro %}
+
+    {{ chart("revenue", "Revenue") }}
+    {% if no_revenue %}<p class="muted">Margins aren't computed for years with zero or negative revenue.</p>{% endif %}
+    {{ chart("operating_margin", "Operating margin") }}
+    {% if capex_missing %}
+      <h2>Free cash flow</h2>
+      <p class="notice">Capex isn't reported in SEC structured data for this company, so free cash flow can't be computed.</p>
+    {% else %}
+      {{ chart("fcf", "Free cash flow", "(operating cash flow, continuing operations first, minus capex; SBC not deducted)") }}
     {% endif %}
+
+    <p class="muted legend"><span class="key stale"></span> may be outdated ·
+      dashed line = basis change (growth across it isn't comparable)</p>
 
     <script src="{{ url_for('static', filename='vendor/echarts.min.js') }}"></script>
     <script>
       const charts = {{ charts | tojson }};
+      const css = getComputedStyle(document.documentElement);
+      const warn = css.getPropertyValue("--warn").trim();
       const dark = matchMedia("(prefers-color-scheme: dark)").matches;
       const fmt = {
         usd: v => "$" + (v / 1e9).toFixed(1) + "B",
         pct: v => (v * 100).toFixed(1) + "%",
       };
       function render(id, type, format) {
-        const points = charts[id];
-        const chart = echarts.init(document.getElementById(id), dark ? "dark" : null);
+        const el = document.getElementById(id);
+        if (!el) return;
+        const { points, breaks } = charts[id];
+        const chart = echarts.init(el, dark ? "dark" : null);
         chart.setOption({
           backgroundColor: "transparent",
-          grid: { left: 64, right: 16, top: 16, bottom: 32 },
+          grid: { left: 64, right: 16, top: 24, bottom: 32 },
           tooltip: {
             trigger: "axis",
             formatter: items => {
               const p = points[items[0].dataIndex];
+              const notes = [];
+              if (p.weeks53) notes.push("53-week year");
+              if (p.stale) notes.push("may be outdated, see note above the chart");
+              if (p.mixed) notes.push("inputs come from different 10-Ks");
               return `<b>${p.label}</b> (ends ${p.end}): ${fmt[format](p.value)}<br>`
+                + notes.map(n => `<i>${n}</i><br>`).join("")
                 + p.sources.map(s => `<span style="font-size:12px">${s}</span>`).join("<br>");
             },
           },
           xAxis: { type: "category", data: points.map(p => p.label) },
           yAxis: { type: "value", axisLabel: { formatter: fmt[format] } },
-          series: [{ type, data: points.map(p => p.value), smooth: false }],
+          series: [{
+            type,
+            data: points.map(p => p.stale ? { value: p.value, itemStyle: { color: warn } } : p.value),
+            markLine: {
+              symbol: "none",
+              silent: true,
+              lineStyle: { type: "dashed", color: warn },
+              label: { formatter: "basis change", color: warn },
+              data: breaks.map(label => ({ xAxis: label })),
+            },
+          }],
         });
         addEventListener("resize", () => chart.resize());
       }
@@ -76,5 +106,6 @@
       render("operating_margin", "line", "pct");
       render("fcf", "bar", "usd");
     </script>
+    {% endif %}
   {% endif %}
 {% endblock %}

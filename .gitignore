@@ -1,0 +1,12 @@
+# Planning docs stay local (personal context; repo is public)
+CLAUDE.md
+ROADMAP.md
+docs/
+
+# Archived raw API responses
+raw/
+
+# Secrets and local databases (Hard rule 6)
+.env
+*.duckdb
+*.duckdb.wal

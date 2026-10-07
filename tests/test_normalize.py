@@ -2,7 +2,6 @@ import json
 from datetime import date
 
 from pricedin.normalize import edgar
-from pricedin.normalize.restated import latest_annual
 from pricedin.normalize.schema import Period
 
 FY2023 = Period(date(2023, 1, 1), date(2023, 12, 31))
@@ -18,31 +17,71 @@ def companyfacts(tags: dict[str, list[dict]]) -> bytes:
     return json.dumps({"cik": 1, "entityName": "Test Co", "facts": {"us-gaap": facts}}).encode()
 
 
+def revenue(tags: dict[str, list[dict]]):
+    return edgar.statements(companyfacts(tags)).series("revenue")
+
+
 def test_latest_restated_value_wins():
-    entries = [
-        entry(100, "2023-01-01", "2023-12-31", "10-K", "2024-02-01", "a"),
-        entry(95, "2023-01-01", "2023-12-31", "10-K", "2025-02-01", "b"),  # restated
-    ]
-    assert latest_annual(entries)[FY2023]["val"] == 95
+    rev = revenue(
+        {
+            "Revenues": [
+                entry(100, "2023-01-01", "2023-12-31", "10-K", "2024-02-01", "a"),
+                entry(95, "2023-01-01", "2023-12-31", "10-K", "2025-02-01", "b"),  # restated
+            ]
+        }
+    )
+    assert rev[FY2023].value == 95
+
+
+def test_newer_filing_beats_higher_ranked_tag():
+    # The old filing used the chain's first tag; the restated value sits under a later tag.
+    rev = revenue(
+        {
+            "Revenues": [entry(100, "2023-01-01", "2023-12-31", "10-K", "2024-02-01", "a")],
+            "RevenueFromContractWithCustomerExcludingAssessedTax": [
+                entry(95, "2023-01-01", "2023-12-31", "10-K", "2025-02-01", "b")
+            ],
+        }
+    )
+    assert rev[FY2023].value == 95
 
 
 def test_quarters_and_non_annual_forms_are_ignored():
-    entries = [
-        entry(25, "2024-10-01", "2024-12-31", "10-K", "2025-02-01"),  # Q4 inside a 10-K
-        entry(90, "2024-01-01", "2024-12-31", "8-K", "2025-03-01"),  # recast in an 8-K
-        entry(100, "2024-01-01", "2024-12-31", "10-K", "2025-02-01"),
-    ]
-    picked = latest_annual(entries)
-    assert list(picked) == [FY2024]
-    assert picked[FY2024]["val"] == 100
+    rev = revenue(
+        {
+            "Revenues": [
+                entry(25, "2024-10-01", "2024-12-31", "10-K", "2025-02-01"),  # Q4 in a 10-K
+                entry(90, "2024-01-01", "2024-12-31", "8-K", "2025-03-01"),  # 8-K recast
+                entry(100, "2024-01-01", "2024-12-31", "10-K", "2025-02-01"),
+            ]
+        }
+    )
+    assert list(rev) == [FY2024]
+    assert rev[FY2024].value == 100
 
 
 def test_amended_10k_counts():
-    entries = [
-        entry(100, "2024-01-01", "2024-12-31", "10-K", "2025-02-01"),
-        entry(101, "2024-01-01", "2024-12-31", "10-K/A", "2025-04-01"),
-    ]
-    assert latest_annual(entries)[FY2024]["val"] == 101
+    rev = revenue(
+        {
+            "Revenues": [
+                entry(100, "2024-01-01", "2024-12-31", "10-K", "2025-02-01", "a"),
+                entry(101, "2024-01-01", "2024-12-31", "10-K/A", "2025-04-01", "b"),
+            ]
+        }
+    )
+    assert rev[FY2024].value == 101
+
+
+def test_restatement_across_filings_is_not_a_conflict():
+    body = companyfacts(
+        {
+            "Revenues": [entry(100, "2023-01-01", "2023-12-31", "10-K", "2024-02-01", "a")],
+            "RevenueFromContractWithCustomerExcludingAssessedTax": [
+                entry(95, "2023-01-01", "2023-12-31", "10-K", "2025-02-01", "b")
+            ],
+        }
+    )
+    assert edgar.statements(body).conflicts == []
 
 
 def test_chain_falls_back_per_period():

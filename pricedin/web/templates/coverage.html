@@ -15,6 +15,11 @@
   {% endfor %}
   {% for sig in co.signals %}<p class="notice">Possible predecessor: {{ sig }}</p>{% endfor %}
 
+  {% if untested %}
+    <p class="notice">Diagnostic view. No golden test yet for:
+      {{ untested | map('replace', '_', ' ') | join(', ') }}. These appear only here, never in
+      charts.</p>
+  {% endif %}
   <p class="muted">Annual values in $ millions. Each year comes from the newest 10-K or 10-K/A
     that shows it in its last three fiscal years. Hover a cell for its tag and filing.
     <span class="key stale"></span> = a newer 10-K reports the year under a tag outside the chain.</p>

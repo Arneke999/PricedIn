@@ -34,23 +34,18 @@
         still shows the raw line items, for reference.</p>
     {% else %}
 
-    {% macro chart(id, title, note=None) %}
-      <h2>{{ title }}{% if note %} <span class="muted">{{ note }}</span>{% endif %}</h2>
-      {% if charts[id].warnings %}
-        <ul class="warnings">{% for w in charts[id].warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+    {% for c in charts %}
+      <h2>{{ c.title }}{% if c.subtitle %} <span class="muted">{{ c.subtitle }}</span>{% endif %}</h2>
+      {% if c.unavailable %}
+        <p class="notice">{{ c.unavailable }}</p>
+      {% else %}
+        {% if c.note %}<p class="muted">{{ c.note }}</p>{% endif %}
+        {% if c.warnings %}
+          <ul class="warnings">{% for w in c.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+        {% endif %}
+        <div id="{{ c.id }}" class="chart"></div>
       {% endif %}
-      <div id="{{ id }}" class="chart"></div>
-    {% endmacro %}
-
-    {{ chart("revenue", "Revenue") }}
-    {% if no_revenue %}<p class="muted">Margins aren't computed for years with zero or negative revenue.</p>{% endif %}
-    {{ chart("operating_margin", "Operating margin") }}
-    {% if capex_missing %}
-      <h2>Free cash flow</h2>
-      <p class="notice">Capex isn't reported in SEC structured data for this company, so free cash flow can't be computed.</p>
-    {% else %}
-      {{ chart("fcf", "Free cash flow", "(operating cash flow, continuing operations first, minus capex; SBC not deducted)") }}
-    {% endif %}
+    {% endfor %}
 
     <p class="muted legend"><span class="key stale"></span> may be outdated ·
       dashed line = basis change (growth across it isn't comparable)</p>
@@ -63,12 +58,11 @@
       const dark = matchMedia("(prefers-color-scheme: dark)").matches;
       const fmt = {
         usd: v => "$" + (v / 1e9).toFixed(1) + "B",
-        pct: v => (v * 100).toFixed(1) + "%",
+        ratio: v => (v * 100).toFixed(1) + "%",
       };
-      function render(id, type, format) {
+      function render({ id, kind, unit, points, breaks }) {
         const el = document.getElementById(id);
         if (!el) return;
-        const { points, breaks } = charts[id];
         const chart = echarts.init(el, dark ? "dark" : null);
         chart.setOption({
           backgroundColor: "transparent",
@@ -81,15 +75,15 @@
               if (p.weeks53) notes.push("53-week year");
               if (p.stale) notes.push("may be outdated, see note above the chart");
               if (p.mixed) notes.push("inputs come from different 10-Ks");
-              return `<b>${p.label}</b> (ends ${p.end}): ${fmt[format](p.value)}<br>`
+              return `<b>${p.label}</b> (ends ${p.end}): ${fmt[unit](p.value)}<br>`
                 + notes.map(n => `<i>${n}</i><br>`).join("")
                 + p.sources.map(s => `<span style="font-size:12px">${s}</span>`).join("<br>");
             },
           },
           xAxis: { type: "category", data: points.map(p => p.label) },
-          yAxis: { type: "value", axisLabel: { formatter: fmt[format] } },
+          yAxis: { type: "value", axisLabel: { formatter: fmt[unit] } },
           series: [{
-            type,
+            type: kind,
             data: points.map(p => p.stale ? { value: p.value, itemStyle: { color: warn } } : p.value),
             markLine: {
               symbol: "none",
@@ -102,9 +96,7 @@
         });
         addEventListener("resize", () => chart.resize());
       }
-      render("revenue", "bar", "usd");
-      render("operating_margin", "line", "pct");
-      render("fcf", "bar", "usd");
+      charts.forEach(render);
     </script>
     {% endif %}
   {% endif %}

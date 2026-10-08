@@ -1,7 +1,6 @@
 """Margin metrics.
 
-Phase 0a skeleton: no golden test yet, so these render only under the page-wide
-"unverified" banner (DECISIONS #17).
+Golden-tested (tests/golden). A page charts them only through metrics/verified.py.
 """
 
 from __future__ import annotations

@@ -3,9 +3,9 @@
 A self-hosted stock research tool. It runs on your own machine as a local web app and
 builds long-run fundamentals for US-listed companies from SEC filings.
 
-**Status: early skeleton.** Charts revenue, operating margin and free cash flow for one
-company at a time. Numbers are not yet verified against hand-computed values, and the page
-says so. Not investment advice.
+**Status: early.** Charts revenue, operating margin and free cash flow for one company at a
+time. A number is charted only once a golden test checks it against values computed by hand
+from 10-K filings (`tests/golden/`). Not investment advice.
 
 ## Requirements
 

@@ -11,15 +11,27 @@ from flask import Flask, redirect, render_template, request, url_for
 
 from pricedin import config
 from pricedin.data import archive, edgar
-from pricedin.metrics.cash_flow import free_cash_flow
-from pricedin.metrics.margins import operating_margin
+from pricedin.metrics.verified import VERIFIED
 from pricedin.normalize import edgar as normalize_edgar
 from pricedin.normalize.predecessors import PREDECESSORS, Predecessor, successor_signals
-from pricedin.normalize.schema import Fact, Statements
+from pricedin.normalize.schema import Statements
 from pricedin.normalize.scope import Scope, classify
 from pricedin.normalize.tags import CHAINS
 
 app = Flask(__name__)
+
+# Company page charts in order: (series, title, ECharts type, subtitle). Every series must be
+# in VERIFIED, which only golden-tested series enter (display gate, DECISIONS #17).
+COMPANY_CHARTS = (
+    ("revenue", "Revenue", "bar", None),
+    ("operating_margin", "Operating margin", "line", None),
+    (
+        "fcf",
+        "Free cash flow",
+        "bar",
+        "(operating cash flow, continuing operations first, minus capex; SBC not deducted)",
+    ),
+)
 
 
 def _user_agent_status() -> str | None:
@@ -115,12 +127,15 @@ def _warnings(stmts: Statements, concepts: set[str], ends: set[date]) -> list[st
     return notes
 
 
-def _chart(stmts: Statements, values: dict[date, float], inputs: list[dict[date, Fact]]):
-    concepts = {series[end].concept for series in inputs for end in values}
+def _chart(stmts: Statements, name: str, title: str, kind: str, subtitle: str | None):
+    series = VERIFIED[name]
+    values = series.values(stmts)
+    inputs = [stmts.series(c) for c in series.inputs]
+    concepts = {by_end[end].concept for by_end in inputs for end in values}
     stale = {(s.concept, s.end) for s in stmts.stale}
     points = []
     for end, value in values.items():
-        facts = [series[end] for series in inputs]
+        facts = [by_end[end] for by_end in inputs]
         points.append(
             {
                 "label": stmts.label(end),
@@ -139,9 +154,16 @@ def _chart(stmts: Statements, values: dict[date, float], inputs: list[dict[date,
         {stmts.label(b.end) for b in stmts.breaks if b.concept in concepts and b.end in values}
     )
     return {
+        "id": name,
+        "title": title,
+        "kind": kind,
+        "subtitle": subtitle,
+        "unit": series.unit,
         "points": points,
         "breaks": breaks,
         "warnings": _warnings(stmts, concepts, set(values)),
+        "note": None,  # shown above the chart
+        "unavailable": None,  # shown instead of the chart
     }
 
 
@@ -164,21 +186,17 @@ def company(ticker: str):
         )
 
     s = co.stmts
-    revenue, op_income = s.series("revenue"), s.series("operating_income")
-    ocf, capex = s.series("operating_cash_flow"), s.series("capex")
-    charts = {
-        "revenue": _chart(s, {e: f.value for e, f in revenue.items()}, [revenue]),
-        "operating_margin": _chart(s, operating_margin(revenue, op_income), [revenue, op_income]),
-        "fcf": _chart(s, free_cash_flow(ocf, capex), [ocf, capex]),
-    }
-    return render_template(
-        "company.html",
-        state=state,
-        charts=charts,
-        capex_missing=bool(ocf) and not capex,
-        no_revenue=any(f.value <= 0 for f in revenue.values()),
-        **ctx,
-    )
+    charts = {spec[0]: _chart(s, *spec) for spec in COMPANY_CHARTS}
+    if any(f.value <= 0 for f in s.series("revenue").values()):
+        charts["operating_margin"]["note"] = (
+            "Margins aren't computed for years with zero or negative revenue."
+        )
+    if s.series("operating_cash_flow") and not s.series("capex"):
+        charts["fcf"]["unavailable"] = (
+            "Capex isn't reported in SEC structured data for this company, so free cash flow "
+            "can't be computed."
+        )
+    return render_template("company.html", state=state, charts=list(charts.values()), **ctx)
 
 
 @app.get("/company/<ticker>/coverage")
@@ -196,6 +214,7 @@ def coverage(ticker: str):
     conflicts = sorted(s.conflicts, key=lambda c: -abs(c.gap or 0))
     return render_template(
         "coverage.html",
+        untested=[c for c in concepts if c not in VERIFIED],
         co=co,
         ticker=co.ticker,
         state=state,

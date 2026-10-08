@@ -1,5 +1,8 @@
-"""Golden tests: canonical line items and metrics vs values Arne computed by hand from
-10-K filings (values.toml).
+"""Golden tests: verified series vs values Arne computed by hand from 10-K filings
+(values.toml).
+
+Every value runs through metrics/verified.py, the same code path a page charts. A key in
+values.toml with no verified series fails: that's the red step before implementing it.
 
 Hard rule 3: a failure means the code or a definition is wrong, never the expected value.
 Each test runs against a pinned companyfacts snapshot (fixtures/, see make_fixtures.py).
@@ -15,8 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from pricedin.metrics.cash_flow import free_cash_flow
-from pricedin.metrics.margins import operating_margin
+from pricedin.metrics.verified import VERIFIED
 from pricedin.normalize import edgar
 from pricedin.normalize.schema import Statements
 from pricedin.normalize.tags import CAPEX_SOFTWARE, CHAINS
@@ -24,7 +26,9 @@ from pricedin.normalize.tags import CAPEX_SOFTWARE, CHAINS
 HERE = Path(__file__).parent
 GOLDEN = tomllib.loads((HERE / "values.toml").read_text())
 TOLERANCE = 0.005  # relative; filings round differently
-LINE_ITEMS = ("revenue", "operating_income", "operating_cash_flow", "capex")
+SCALE = {"usd": 1e6, "ratio": 0.01}  # values.toml: $ millions, margins in percent
+CAPEX_PARTS = ("capex_ppe", "capex_software")  # summed into capex (DECISIONS #40)
+MIN_COMPANIES = 3  # golden set: 3-5 companies across sectors
 
 
 def periods():
@@ -34,12 +38,12 @@ def periods():
                 yield ticker, date.fromisoformat(key), values
 
 
-def expected_capex(values: dict) -> float | None:
-    if "capex" in values:
-        return values["capex"]
-    if "capex_ppe" in values:
-        return values["capex_ppe"] + values["capex_software"]
-    return None
+def expected(values: dict) -> dict[str, float]:
+    """Golden value per series name for one period."""
+    out = {k: v for k, v in values.items() if k not in CAPEX_PARTS}
+    if all(part in values for part in CAPEX_PARTS):
+        out["capex"] = sum(values[part] for part in CAPEX_PARTS)
+    return out
 
 
 @cache
@@ -47,46 +51,32 @@ def statements(ticker: str) -> Statements:
     return edgar.statements((HERE / "fixtures" / f"{ticker}.json").read_bytes())
 
 
-LINE_CASES = [
-    pytest.param(t, end, item, id=f"{t}-{end}-{item}")
+CASES = [
+    pytest.param(t, end, name, value, id=f"{t}-{end}-{name}")
     for t, end, values in periods()
-    for item in LINE_ITEMS
-    if (expected_capex(values) if item == "capex" else values.get(item)) is not None
+    for name, value in expected(values).items()
 ]
 
 
-@pytest.mark.parametrize("ticker,end,item", LINE_CASES)
-def test_line_item(ticker, end, item):
-    values = dict(periods_by_key()[(ticker, end)])
-    expected = expected_capex(values) if item == "capex" else values[item]
-    fact = statements(ticker).series(item).get(end)
-    assert fact is not None, f"{item} for {end} not resolved"
-    assert fact.value / 1e6 == pytest.approx(expected, rel=TOLERANCE), (
-        f"{fact.source_tag} from {fact.accession}"
-    )
+@pytest.mark.parametrize("ticker,end,name,value", CASES)
+def test_golden(ticker, end, name, value):
+    assert name in VERIFIED, f"no verified series {name!r}: add it to metrics/verified.py"
+    series, s = VERIFIED[name], statements(ticker)
+    actual = series.values(s).get(end)
+    assert actual is not None, f"{name} for {end} not resolved"
+    sources = [
+        f"{f.source_tag} from {f.accession}"
+        for f in (s.series(c).get(end) for c in series.inputs)
+        if f
+    ]
+    assert actual / SCALE[series.unit] == pytest.approx(value, rel=TOLERANCE), sources
 
 
-@pytest.mark.parametrize(
-    "ticker,end",
-    [pytest.param(t, e, id=f"{t}-{e}") for t, e, v in periods() if "operating_margin" in v],
-)
-def test_operating_margin(ticker, end):
-    s = statements(ticker)
-    margin = operating_margin(s.series("revenue"), s.series("operating_income")).get(end)
-    assert margin is not None
-    expected = periods_by_key()[(ticker, end)]["operating_margin"]
-    assert margin * 100 == pytest.approx(expected, rel=TOLERANCE)
-
-
-@pytest.mark.parametrize(
-    "ticker,end", [pytest.param(t, e, id=f"{t}-{e}") for t, e, v in periods() if "fcf" in v]
-)
-def test_free_cash_flow(ticker, end):
-    s = statements(ticker)
-    fcf = free_cash_flow(s.series("operating_cash_flow"), s.series("capex")).get(end)
-    assert fcf is not None
-    expected = periods_by_key()[(ticker, end)]["fcf"]
-    assert fcf / 1e6 == pytest.approx(expected, rel=TOLERANCE)
+@pytest.mark.parametrize("name", list(VERIFIED))
+def test_every_verified_series_has_golden_values(name):
+    """The display gate: nothing enters VERIFIED on a token test."""
+    companies = {t for t, _, values in periods() if name in expected(values)}
+    assert len(companies) >= MIN_COMPANIES, f"{name}: golden values for {sorted(companies)}"
 
 
 def test_fixtures_contain_every_chain_tag():
@@ -95,8 +85,3 @@ def test_fixtures_contain_every_chain_tag():
     for ticker in GOLDEN:
         meta = json.loads((HERE / "fixtures" / f"{ticker}.json").read_text())["pricedin_fixture"]
         assert chain_tags <= set(meta["tags"]), f"{ticker}: run make_fixtures.py"
-
-
-@cache
-def periods_by_key() -> dict:
-    return {(t, end): values for t, end, values in periods()}

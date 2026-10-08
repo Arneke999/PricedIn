@@ -38,11 +38,6 @@ def ticker_index(body: bytes) -> dict[str, tuple[int, str]]:
     return {row["ticker"].upper(): (int(row["cik_str"]), row["title"]) for row in rows}
 
 
-def taxonomies(body: bytes) -> dict[str, int]:
-    """Taxonomy -> number of concepts reported, e.g. {"us-gaap": 503, "dei": 2}."""
-    return {name: len(concepts) for name, concepts in json.loads(body).get("facts", {}).items()}
-
-
 @dataclass
 class _Filing:
     filed: str
@@ -170,6 +165,7 @@ def statements(body: bytes, predecessors: Sequence[bytes] = ()) -> Statements:
         name=docs[0].get("entityName", ""),
         facts={},
         fy_offset=_fy_offset(sources[0], filings),
+        taxonomies={name: len(c) for name, c in docs[0].get("facts", {}).items()},
     )
     by_concept: dict[str, dict[date, list[_Candidate]]] = {}
     # Years each filing presents in its statements: any chain tag of any concept. A note

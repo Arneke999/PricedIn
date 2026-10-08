@@ -7,7 +7,7 @@
     <a href="{{ url_for('company', ticker=ticker) }}">Charts</a> ·
     <span class="muted">SEC data fetched {{ co.fetched_at }} ·
       {% if co.scope %}SIC {{ co.scope.sic }} {{ co.scope.sic_description }} · {{ co.scope.status }}{% if co.scope.category %} ({{ co.scope.category }}){% endif %} ·{% endif %}
-      taxonomies: {% for name, n in co.taxonomies.items() %}{{ name }} ({{ n }}){% if not loop.last %}, {% endif %}{% endfor %}
+      taxonomies: {% for name, n in s.taxonomies.items() %}{{ name }} ({{ n }}){% if not loop.last %}, {% endif %}{% endfor %}
     </span>
   </p>
   {% for p in co.predecessors %}

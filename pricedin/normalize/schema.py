@@ -103,6 +103,8 @@ class Statements:
     flags: list[Flag] = field(default_factory=list)
     # Company naming: label year = nominal year of the end date + offset (DECISIONS #29)
     fy_offset: int = 0
+    # Taxonomy -> concepts the primary filer reports, e.g. {"us-gaap": 503, "dei": 2}
+    taxonomies: dict[str, int] = field(default_factory=dict)
 
     def series(self, concept: str) -> dict[date, Fact]:
         return self.facts.get(concept, {})

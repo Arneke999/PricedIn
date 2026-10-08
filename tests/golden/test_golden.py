@@ -40,9 +40,12 @@ def periods():
 
 def expected(values: dict) -> dict[str, float]:
     """Golden value per series name for one period."""
+    parts = [p for p in CAPEX_PARTS if p in values]
+    assert len(parts) in (0, len(CAPEX_PARTS)), f"capex needs all of {CAPEX_PARTS}: {parts}"
+    assert not (parts and "capex" in values), "give capex or its parts, not both"
     out = {k: v for k, v in values.items() if k not in CAPEX_PARTS}
-    if all(part in values for part in CAPEX_PARTS):
-        out["capex"] = sum(values[part] for part in CAPEX_PARTS)
+    if parts:
+        out["capex"] = sum(values[p] for p in CAPEX_PARTS)
     return out
 
 

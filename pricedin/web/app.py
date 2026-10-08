@@ -58,7 +58,6 @@ class _Company:
     scope: Scope | None = None
     stmts: Statements | None = None
     fetched_at: str | None = None
-    taxonomies: dict[str, int] = field(default_factory=dict)
     predecessors: tuple[Predecessor, ...] = ()
     signals: list[str] = field(default_factory=list)
 
@@ -82,7 +81,6 @@ def _load(ticker: str) -> tuple[str, _Company]:
 
     body, manifest_entry = facts
     company.fetched_at = manifest_entry["fetched_at"]
-    company.taxonomies = normalize_edgar.taxonomies(body)
     company.predecessors = PREDECESSORS.get(company.cik, ())
     older = [archive.latest(edgar.companyfacts_kind(p.cik)) for p in company.predecessors]
     company.stmts = normalize_edgar.statements(body, [c[0] for c in older if c])
@@ -114,12 +112,13 @@ def _warnings(stmts: Statements, concepts: set[str], ends: set[date]) -> list[st
             )
     for s in stmts.stale:
         if s.concept in concepts and s.end in ends:
-            hint = ", ".join(f"{tag} = {_usd(v)}" for tag, v in s.hints[:2])
+            hint = ", ".join(tag for tag, _ in s.hints[:2])
             notes.append(
                 f"{stmts.label(s.end)} {s.concept.replace('_', ' ')} may be outdated: the 10-K "
                 f"filed {s.newer_filed} (accn {s.newer_accession}) reports this year, but not "
                 f"under the tags PricedIn reads. Shown: {_usd(s.used.value)} from the 10-K "
-                f"filed {s.used.filed}." + (f" Related tags there: {hint}." if hint else "")
+                f"filed {s.used.filed}."
+                + (f" Related tags there (values on the coverage page): {hint}." if hint else "")
             )
     for f in stmts.flags:
         if f.concept in concepts and f.end in ends:

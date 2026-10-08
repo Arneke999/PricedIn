@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 
 from pricedin.normalize.restated import SAME_START, annual, filing_key, in_window, nominal_year
@@ -19,7 +19,14 @@ from pricedin.normalize.schema import (
     Statements,
     pct_change,
 )
-from pricedin.normalize.tags import CHAINS, CONTRACT_REVENUE, HINTS, NON_CONTRACT_REVENUE
+from pricedin.normalize.tags import (
+    CAPEX_PPE,
+    CAPEX_SOFTWARE,
+    CHAINS,
+    CONTRACT_REVENUE,
+    HINTS,
+    NON_CONTRACT_REVENUE,
+)
 
 # Recast breaks smaller than this are rounding, not a change of basis (golden tolerance).
 BREAK_THRESHOLD = 0.005
@@ -96,6 +103,31 @@ def _index(sources: Sequence[_Source]) -> dict[str, _Filing]:
     return filings
 
 
+def _software(sources: Sequence[_Source]) -> dict[tuple[str, date], tuple[str, dict]]:
+    """(accession, year end) -> the capitalized-software tag and entry it reports."""
+    found: dict[tuple[str, date], tuple[str, dict]] = {}
+    for tag in CAPEX_SOFTWARE:
+        for source in sources:
+            for period, entry in _usd_annual(source, tag):
+                found.setdefault((entry["accn"], period.end), (tag, entry))
+    return found
+
+
+def _filing_fact(concept: str, ranked: list[_Candidate], software: dict) -> Fact:
+    """A filing's value for a concept and year: its first chain tag, plus capitalized
+    software on top of PP&E capex (DECISIONS #41)."""
+    first = ranked[0]
+    fact = first.fact(concept)
+    if concept == "capex" and first.tag == CAPEX_PPE:
+        extra = software.get((first.entry["accn"], first.period.end))
+        if extra:
+            tag, entry = extra
+            fact = replace(
+                fact, value=fact.value + float(entry["val"]), source_tag=f"{first.tag} + {tag}"
+            )
+    return fact
+
+
 def _hints(sources: Sequence[_Source], concept: str, accn: str, end: date) -> tuple:
     """Tags in a filing, for a year, whose names look like the concept."""
     found = []
@@ -154,6 +186,7 @@ def statements(body: bytes, predecessors: Sequence[bytes] = ()) -> Statements:
                         )
                         presented[entry["accn"]].add(period.end)
 
+    software = _software(sources)
     for concept, candidates in by_concept.items():
         resolved: dict[date, Fact] = {}
         for end in sorted(candidates):
@@ -163,7 +196,7 @@ def statements(body: bytes, predecessors: Sequence[bytes] = ()) -> Statements:
                 (c for c in found if filing_key(c.entry) == newest), key=lambda c: c.rank
             )
             winner = in_filing[0]
-            chosen = resolved[end] = winner.fact(concept)
+            chosen = resolved[end] = _filing_fact(concept, in_filing, software)
 
             for other in in_filing[1:]:
                 same_year = abs(other.period.start - winner.period.start) <= SAME_START
@@ -212,7 +245,7 @@ def statements(body: bytes, predecessors: Sequence[bytes] = ()) -> Statements:
             )
             if not restated:
                 continue
-            before = restated[0].fact(concept)
+            before = _filing_fact(concept, restated, software)
             change = pct_change(before.value, resolved[end].value)
             if change is not None and abs(change) > BREAK_THRESHOLD:
                 result.breaks.append(Break(concept, end, prev_end, before, resolved[end]))

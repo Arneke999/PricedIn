@@ -34,6 +34,11 @@ CHAINS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# Capitalized software is added to PP&E capex when the same filing reports both for the same
+# year (DECISIONS #40, #41). First tag found wins.
+CAPEX_PPE = "PaymentsToAcquirePropertyPlantAndEquipment"
+CAPEX_SOFTWARE = ("PaymentsToAcquireSoftware", "PaymentsToDevelopSoftware")
+
 # ASC 606 contract revenue can exclude lease, interest or insurance income. When the
 # filing also reports this tag, contract revenue is likely a subset of the total.
 NON_CONTRACT_REVENUE = "RevenueNotFromContractWithCustomer"

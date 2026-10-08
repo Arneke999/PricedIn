@@ -36,7 +36,8 @@
             <td class="num {{ 'stale' if (f.concept, end) in stale else '' }}"
                 title="{{ f.source_tag }}&#10;{{ f.form }} filed {{ f.filed }}&#10;accn {{ f.accession }}{% if f.cik != co.cik %}&#10;predecessor CIK {{ f.cik }}{% endif %}">
               {{ "{:,.0f}".format(f.value / 1e6) }}
-              {% if f.source_tag != chains[f.concept][0] %}<sup class="alt" title="fallback tag: {{ f.source_tag }}">alt</sup>{% endif %}
+              {% if " + " in f.source_tag %}<sup class="alt" title="sum: {{ f.source_tag }}">sum</sup>
+              {% elif f.source_tag != chains[f.concept][0] %}<sup class="alt" title="fallback tag: {{ f.source_tag }}">alt</sup>{% endif %}
             </td>
           {% else %}
             <td class="gap">–</td>

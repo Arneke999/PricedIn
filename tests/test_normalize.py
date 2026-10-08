@@ -255,3 +255,46 @@ def test_predecessor_history_is_pooled():
 def test_ticker_index():
     body = json.dumps({"0": {"cik_str": 1652044, "ticker": "googl", "title": "Alphabet Inc."}})
     assert edgar.ticker_index(body.encode())["GOOGL"] == (1652044, "Alphabet Inc.")
+
+
+def test_capex_adds_capitalized_software_from_the_same_filing():
+    s = resolve(
+        {
+            "PaymentsToAcquirePropertyPlantAndEquipment": [entry(489, 2025)],
+            "PaymentsToAcquireSoftware": [entry(726, 2025)],
+        }
+    )
+    capex = s.series("capex")[date(2025, 12, 31)]
+    assert capex.value == 1215
+    assert (
+        capex.source_tag == "PaymentsToAcquirePropertyPlantAndEquipment + PaymentsToAcquireSoftware"
+    )
+
+
+def test_capex_software_sum_does_not_create_false_breaks():
+    # Both 10-Ks agree on 2024. Comparing a PP&E-only "before" with a summed "after"
+    # would wrongly report a basis change between 2023 and 2024.
+    s = resolve(
+        {
+            "PaymentsToAcquirePropertyPlantAndEquipment": [
+                entry(380, 2023, filed="2025-02-01", accn="a"),
+                entry(474, 2024, filed="2025-02-01", accn="a"),
+                entry(474, 2024, filed="2026-02-01", accn="b"),
+                entry(489, 2025, filed="2026-02-01", accn="b"),
+            ],
+            "PaymentsToAcquireSoftware": [
+                entry(600, 2023, filed="2025-02-01", accn="a"),
+                entry(720, 2024, filed="2025-02-01", accn="a"),
+                entry(720, 2024, filed="2026-02-01", accn="b"),
+                entry(726, 2025, filed="2026-02-01", accn="b"),
+            ],
+        }
+    )
+    assert s.series("capex")[Y2024].value == 1194
+    assert s.breaks == []
+
+
+def test_combined_capex_tag_is_used_alone():
+    s = resolve({"PaymentsToAcquireProductiveAssets": [entry(1273, 2025)]})
+    capex = s.series("capex")[date(2025, 12, 31)]
+    assert (capex.value, capex.source_tag) == (1273, "PaymentsToAcquireProductiveAssets")

@@ -1,0 +1,105 @@
+# Golden values, hand-computed by Arne from 10-K filings.
+#
+# Hard rule 3: never edit a value here to make a test pass. A failing golden test means the
+# code is wrong or a definition is ambiguous. Investigate, then report.
+#
+# Each value is from the most recent 10-K that shows that fiscal year (latest-restated),
+# keyed by period end date. $ millions as printed; capex as a positive payment (the 10-K
+# prints it in parentheses). Margins in percent, rounded to two decimals.
+# Capex includes capitalized software (DECISIONS #40); FCF = operating cash flow - capex.
+
+[GOOGL]
+cik = 1652044
+source = "10-K filed 2026-02-05, accession 0001652044-26-000018 (income p.50, cash flows p.53)"
+
+[GOOGL."2025-12-31"]
+revenue = 402836                # Revenues
+operating_income = 129039       # Income from operations
+operating_cash_flow = 164713    # Net cash provided by operating activities
+capex = 91447                   # Purchases of property and equipment
+operating_margin = 32.03
+fcf = 73266
+
+[GOOGL."2024-12-31"]
+revenue = 350018
+operating_income = 112390
+operating_cash_flow = 125299
+capex = 52535
+operating_margin = 32.11
+fcf = 72764
+
+[COST]
+cik = 909832
+source = "10-K filed 2026-10-07, accession 0000909832-26-000093 (income p.48, cash flows p.52)"
+
+[COST."2026-08-30"]
+revenue = 303154                # Total revenue (net sales + membership fees)
+operating_income = 11685        # Operating income
+operating_cash_flow = 15817     # Net cash provided by operating activities
+capex = 6435                    # Additions to property and equipment
+operating_margin = 3.85
+fcf = 9382
+
+[COST."2025-08-31"]
+revenue = 275235
+operating_income = 10383
+operating_cash_flow = 13335
+capex = 5498
+operating_margin = 3.77
+fcf = 7837
+
+[MA]
+cik = 1141391
+source = "10-K filed 2026-02-11, accession 0001141391-26-000013 (income p.81, cash flows p.86)"
+
+[MA."2025-12-31"]
+revenue = 32791                 # Net revenue
+operating_income = 18897        # Operating income
+operating_cash_flow = 17648     # Net cash provided by operating activities
+capex_ppe = 489                 # Purchases of property and equipment
+capex_software = 726            # Capitalized software
+operating_margin = 57.63
+fcf = 16433
+
+[MA."2024-12-31"]
+revenue = 28167
+operating_income = 15582
+operating_cash_flow = 14780
+capex_ppe = 474
+capex_software = 720
+operating_margin = 55.32
+fcf = 13586
+
+[GE]
+cik = 40545
+source = "10-K filed 2026-01-29, accession 0000040545-26-000008 (cash flows p.38); no operating income line"
+
+[GE."2025-12-31"]
+operating_cash_flow = 8543      # Cash from (used for) operating activities - continuing operations
+capex = 1273                    # Additions to property, plant and equipment and internal-use software
+fcf = 7270
+
+[GE."2024-12-31"]
+operating_cash_flow = 5817
+capex = 1032
+fcf = 4785
+
+[KO]
+cik = 21344
+source = "10-K filed 2026-02-20, accession 0001628280-26-010047 (income p.63, cash flows p.66)"
+
+[KO."2025-12-31"]
+revenue = 47941                 # Net Operating Revenues
+operating_income = 13762        # Operating Income
+operating_cash_flow = 7408      # Net Cash Provided by Operating Activities
+capex = 2112                    # Purchases of property, plant and equipment
+operating_margin = 28.71
+fcf = 5296
+
+[KO."2024-12-31"]
+revenue = 47061
+operating_income = 9992
+operating_cash_flow = 6805
+capex = 2064
+operating_margin = 21.23
+fcf = 4741

@@ -12,7 +12,8 @@ from fractions import Fraction
 from flask import Flask, redirect, render_template, request, url_for
 
 from pricedin import config
-from pricedin.data import archive, edgar
+from pricedin.data import archive, edgar, treasury
+from pricedin.metrics.discount import EQUITY_RISK_PREMIUM, required_return
 from pricedin.metrics.returns import loss_years, statutory_years
 from pricedin.metrics.verified import VERIFIED
 from pricedin.normalize import edgar as normalize_edgar
@@ -21,6 +22,7 @@ from pricedin.normalize.restated import nominal_year
 from pricedin.normalize.schema import Statements
 from pricedin.normalize.scope import Scope, classify
 from pricedin.normalize.tags import CHAINS
+from pricedin.normalize.treasury import latest_ten_year
 
 app = Flask(__name__)
 
@@ -104,6 +106,16 @@ def _load(ticker: str) -> tuple[str, _Company]:
 
     excluded = company.scope is not None and company.scope.status == "excluded"
     return ("excluded" if excluded else "ok"), company
+
+
+def _ten_year() -> tuple[date, float] | None:
+    """The latest archived 10-year Treasury yield (this year's file, else last year's)."""
+    year = date.today().year
+    for kind in (treasury.yield_curve_kind(year), treasury.yield_curve_kind(year - 1)):
+        cached = archive.latest(kind)
+        if cached and (found := latest_ten_year(cached[0])):
+            return found
+    return None
 
 
 def _usd(value: float) -> str:
@@ -229,6 +241,7 @@ def _chart(stmts: Statements, name: str, title: str, kind: str, subtitle: str | 
             for g in gaps
         ],
         "note": None,  # shown above the chart
+        "reference": None,  # a horizontal line: {"value", "label"}
         "unavailable": None,  # shown instead of the chart
     }
 
@@ -294,6 +307,21 @@ def company(ticker: str):
             f"{', '.join(losses)}: operating loss, so no tax is applied (NOPAT is the loss)."
         )
     roic["note"] = " ".join(notes) or None
+    ten_year = _ten_year()
+    if ten_year is None:
+        roic["reference"] = None
+        if not roic["unavailable"]:
+            extra = "Refresh to fetch the 10-year Treasury yield for the required-return line."
+            roic["note"] = f"{roic['note']} {extra}" if roic["note"] else extra
+    else:
+        day, rate = ten_year
+        target = required_return(rate)
+        roic["reference"] = {"value": target, "label": f"required return {target:.1%}"}
+        explain = (
+            f"Dotted line: a required return of {target:.1%}, the 10-year Treasury yield "
+            f"({rate:.2%} on {day}) plus a {EQUITY_RISK_PREMIUM:.0%} equity risk premium."
+        )
+        roic["note"] = f"{roic['note']} {explain}" if roic["note"] else explain
     if s.series("operating_cash_flow") and not s.series("capex"):
         charts["fcf"]["unavailable"] = (
             "Capex isn't reported in SEC structured data for this company, so free cash flow "
@@ -350,4 +378,9 @@ def refresh(ticker: str):
         return redirect(url_for("company", ticker=ticker, error=str(e)))
     except (urllib.error.URLError, TimeoutError) as e:
         return redirect(url_for("company", ticker=ticker, error=f"SEC fetch failed: {e}"))
+    try:
+        treasury.fetch_year(date.today().year)
+    except (urllib.error.URLError, TimeoutError) as e:
+        # The SEC data refreshed; the page keeps the last archived yield and its date.
+        return redirect(url_for("company", ticker=ticker, error=f"Treasury fetch failed: {e}"))
     return redirect(url_for("company", ticker=ticker))

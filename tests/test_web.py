@@ -127,3 +127,27 @@ def test_share_counts_in_warnings_are_shares_not_dollars():
     [note] = _warnings(statements(after, breaks=[brk]), {"diluted_shares"}, {after.period.end})
     assert "from 100M shares to 130M shares" in note
     assert "$" not in note
+
+
+def roic_chart(client):
+    html = client.get("/company/KO").get_data(as_text=True)
+    charts = json.loads(re.search(r"const charts = (.*);\n", html).group(1))
+    return next(c for c in charts if c["id"] == "roic")
+
+
+def test_roic_chart_draws_the_required_return(client):
+    from pricedin.data import treasury
+
+    year = date.today().year
+    csv = f'Date,"10 Yr"\n10/08/{year},5.22\n'.encode()
+    archive.store(treasury.yield_curve_kind(year), "fixture", csv)
+    chart = roic_chart(client)
+    assert chart["reference"]["value"] == pytest.approx(0.1022)
+    assert chart["reference"]["label"] == "required return 10.2%"
+    assert f"10-year Treasury yield (5.22% on {year}-10-08) plus a 5% equity" in chart["note"]
+
+
+def test_roic_chart_without_a_yield_says_how_to_get_one(client):
+    chart = roic_chart(client)
+    assert chart["reference"] is None
+    assert "Refresh to fetch the 10-year Treasury yield" in chart["note"]

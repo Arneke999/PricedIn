@@ -66,7 +66,8 @@
         ratio: v => (v * 100).toFixed(1) + "%",
         shares: v => (v / 1e6).toLocaleString(undefined, { maximumFractionDigits: 0 }) + "M",
       };
-      function render({ id, kind, unit, points, breaks }) {
+      const muted = css.getPropertyValue("--muted").trim();
+      function render({ id, kind, unit, points, breaks, reference }) {
         const el = document.getElementById(id);
         if (!el) return;
         const chart = echarts.init(el, dark ? "dark" : null);
@@ -97,9 +98,20 @@
               silent: true,
               lineStyle: { type: "dashed", color: warn },
               label: { formatter: "basis change", color: warn },
-              data: breaks.map(label => ({ xAxis: label })),
+              data: [
+                ...breaks.map(label => ({ xAxis: label })),
+                ...(reference ? [{
+                  yAxis: reference.value,
+                  lineStyle: { type: "dotted", color: muted },
+                  label: { formatter: reference.label, color: muted, position: "insideEndTop" },
+                }] : []),
+              ],
             },
-          }],
+          }, ...(reference ? [{
+            // invisible point so the axis range includes the reference line
+            type: "scatter", symbolSize: 0, silent: true, tooltip: { show: false },
+            data: [[points[0].label, reference.value]],
+          }] : [])],
         });
         addEventListener("resize", () => chart.resize());
       }

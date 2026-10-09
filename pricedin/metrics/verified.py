@@ -19,7 +19,7 @@ from pricedin.normalize.schema import Fact, Statements
 
 
 def line_item(series: dict[date, Fact]) -> dict[date, float]:
-    """A canonical line item as reported, no arithmetic."""
+    """A canonical line item as resolved (share counts split-adjusted), no arithmetic."""
     return {e: f.value for e, f in series.items()}
 
 
@@ -27,7 +27,7 @@ def line_item(series: dict[date, Fact]) -> dict[date, float]:
 class Series:
     inputs: tuple[str, ...]  # canonical concepts, passed to compute in this order
     compute: Callable[..., dict[date, float]]
-    unit: Literal["usd", "ratio"]
+    unit: Literal["usd", "ratio", "shares"]
 
     def values(self, stmts: Statements) -> dict[date, float]:
         return self.compute(*(stmts.series(c) for c in self.inputs))
@@ -40,4 +40,7 @@ VERIFIED: dict[str, Series] = {
     "capex": Series(("capex",), line_item, "usd"),
     "operating_margin": Series(("revenue", "operating_income"), operating_margin, "ratio"),
     "fcf": Series(("operating_cash_flow", "capex"), free_cash_flow, "usd"),
+    "net_income": Series(("net_income",), line_item, "usd"),
+    "sbc": Series(("sbc",), line_item, "usd"),
+    "diluted_shares": Series(("diluted_shares",), line_item, "shares"),
 }

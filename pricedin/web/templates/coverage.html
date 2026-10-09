@@ -20,7 +20,7 @@
       {{ untested | map('replace', '_', ' ') | join(', ') }}. These appear only here, never in
       charts.</p>
   {% endif %}
-  <p class="muted">Annual values in $ millions. Each year comes from the newest 10-K or 10-K/A
+  <p class="muted">Annual values in millions (dollars, or shares for share counts). Each year comes from the newest 10-K or 10-K/A
     that shows it in its last three fiscal years. Hover a cell for its tag and filing.
     <span class="key stale"></span> = a newer 10-K reports the year under a tag outside the chain.</p>
 
@@ -43,6 +43,7 @@
               {{ "{:,.0f}".format(f.value / 1e6) }}
               {% if " + " in f.source_tag %}<sup class="alt" title="sum: {{ f.source_tag }}">sum</sup>
               {% elif f.source_tag != chains[f.concept][0] %}<sup class="alt" title="fallback tag: {{ f.source_tag }}">alt</sup>{% endif %}
+              {% if f.split_factor != 1 %}<sup class="alt" title="split-adjusted {{ ratio(f.split_factor) }}; as reported: {{ '{:,.0f}'.format(f.as_reported / 1e6) }}">split</sup>{% endif %}
             </td>
           {% else %}
             <td class="gap">–</td>
@@ -64,9 +65,26 @@
         <tr>
           <td>{{ b.concept | replace('_', ' ') }}</td>
           <td>{{ s.label(b.prev_end) }} → {{ s.label(b.end) }}</td>
-          <td>{{ usd(b.before.value) }} → {{ usd(b.after.value) }}</td>
+          <td>{{ amount(b.before.value, b.before.unit) }} → {{ amount(b.after.value, b.after.unit) }}</td>
           <td class="num">{{ "{:+.1%}".format(b.change) }}</td>
           <td class="muted">{{ b.before.accession }} → {{ b.after.accession }}</td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% endif %}
+
+  {% if s.splits %}
+    <h2>Stock splits</h2>
+    <p class="muted">A newer 10-K restated a share count by a split ratio. Share counts from
+      older filings are multiplied to match the newest one.</p>
+    <table>
+      <tr><th>Concept</th><th>Year</th><th>Split</th><th>Restated</th><th>Filings</th></tr>
+      {% for sp in s.splits %}
+        <tr>
+          <td>{{ sp.concept | replace('_', ' ') }}</td><td>{{ s.label(sp.end) }}</td>
+          <td>{{ ratio(sp.ratio) }}</td>
+          <td>{{ amount(sp.before.value, sp.before.unit) }} → {{ amount(sp.after.value, sp.after.unit) }}</td>
+          <td class="muted">{{ sp.before.accession }} → {{ sp.after.accession }}</td>
         </tr>
       {% endfor %}
     </table>
@@ -79,9 +97,9 @@
       {% for x in s.stale %}
         <tr>
           <td>{{ x.concept | replace('_', ' ') }}</td><td>{{ s.label(x.end) }}</td>
-          <td>{{ usd(x.used.value) }} ({{ x.used.filed }})</td>
+          <td>{{ amount(x.used.value, x.used.unit) }} ({{ x.used.filed }})</td>
           <td>{{ x.newer_accession }} ({{ x.newer_filed }})</td>
-          <td>{% for tag, v in x.hints %}<code>{{ tag }}</code> = {{ usd(v) }}{% if not loop.last %}<br>{% endif %}{% else %}<span class="muted">none found</span>{% endfor %}</td>
+          <td>{% for tag, v in x.hints %}<code>{{ tag }}</code> = {{ amount(v, x.used.unit) }}{% if not loop.last %}<br>{% endif %}{% else %}<span class="muted">none found</span>{% endfor %}</td>
         </tr>
       {% endfor %}
     </table>
@@ -105,8 +123,8 @@
       {% for c in conflicts %}
         <tr>
           <td>{{ c.concept | replace('_', ' ') }}</td><td>{{ s.label(c.end) }}</td>
-          <td>{{ c.chosen.source_tag }}: {{ usd(c.chosen.value) }}</td>
-          <td>{{ c.other.source_tag }}: {{ usd(c.other.value) }}</td>
+          <td>{{ c.chosen.source_tag }}: {{ amount(c.chosen.value, c.chosen.unit) }}</td>
+          <td>{{ c.other.source_tag }}: {{ amount(c.other.value, c.other.unit) }}</td>
           <td class="num">{% if c.gap is not none %}{{ "{:+.1%}".format(c.gap) }}{% endif %}</td>
         </tr>
       {% endfor %}

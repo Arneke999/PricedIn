@@ -26,7 +26,7 @@ from pricedin.normalize.tags import CAPEX_SOFTWARE, CHAINS
 HERE = Path(__file__).parent
 GOLDEN = tomllib.loads((HERE / "values.toml").read_text())
 TOLERANCE = 0.005  # relative; filings round differently
-SCALE = {"usd": 1e6, "ratio": 0.01}  # values.toml: $ millions, margins in percent
+SCALE = {"usd": 1e6, "ratio": 0.01, "shares": 1e6}  # values.toml: millions; margins in %
 CAPEX_PARTS = ("capex_ppe", "capex_software")  # summed into capex (DECISIONS #40)
 MIN_COMPANIES = 3  # golden set: 3-5 companies across sectors
 

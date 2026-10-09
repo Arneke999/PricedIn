@@ -1,6 +1,7 @@
 """Ordered XBRL tag fallback chains per canonical concept.
 
-Approved by Arne after the Phase 0b spike (DECISIONS #31-#34). For each fiscal year the
+Approved by Arne after the Phase 0b spike (DECISIONS #31-#34), SBC and diluted shares
+in Phase 1 (#49, #52). For each fiscal year the
 newest filing wins, then the first tag in the chain that the filing reports. Changing an
 order is Arne's decision. edgartools' MIT gaap_mappings.json is a reading reference when
 extending a chain.
@@ -32,7 +33,28 @@ CHAINS: dict[str, tuple[str, ...]] = {
         "PaymentsToAcquirePropertyPlantAndEquipment",
         "PaymentsToAcquireProductiveAssets",
     ),
+    "sbc": (
+        # The cash-flow add-back only (DECISIONS #52): FCF minus SBC subtracts what operating
+        # cash flow added back. The expense tag measures something else, and GE files its
+        # after-tax figure under it.
+        "ShareBasedCompensation",
+    ),
+    "diluted_shares": (
+        "WeightedAverageNumberOfDilutedSharesOutstanding",
+        "WeightedAverageNumberOfShareOutstandingBasicAndDiluted",
+        # Filers with no dilutive securities may tag only basic (XOM after 2013)
+        "WeightedAverageNumberOfSharesOutstandingBasic",
+    ),
 }
+
+# Fallback tags that measure something narrower than the concept: a different value in the
+# same filing is expected, not a conflict.
+NARROWER: dict[str, frozenset[str]] = {
+    "diluted_shares": frozenset({"WeightedAverageNumberOfSharesOutstandingBasic"}),
+}
+
+# companyfacts unit per concept; concepts not listed are in USD.
+UNITS: dict[str, str] = {"diluted_shares": "shares"}
 
 # Capitalized software is added to PP&E capex when the same filing reports both for the same
 # year (DECISIONS #40, #41). First tag found wins.
@@ -56,4 +78,6 @@ HINTS: dict[str, tuple[str, ...]] = {
     "net_income": ("NetIncome", "ProfitLoss"),
     "operating_cash_flow": ("OperatingActivities",),
     "capex": ("PaymentsToAcquire",),
+    "sbc": ("ShareBased", "StockBased"),
+    "diluted_shares": ("WeightedAverageNumber",),
 }

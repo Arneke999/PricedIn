@@ -4,8 +4,10 @@ format it."""
 from __future__ import annotations
 
 import urllib.error
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date
+from fractions import Fraction
 
 from flask import Flask, redirect, render_template, request, url_for
 
@@ -14,6 +16,7 @@ from pricedin.data import archive, edgar
 from pricedin.metrics.verified import VERIFIED
 from pricedin.normalize import edgar as normalize_edgar
 from pricedin.normalize.predecessors import PREDECESSORS, Predecessor, successor_signals
+from pricedin.normalize.restated import nominal_year
 from pricedin.normalize.schema import Statements
 from pricedin.normalize.scope import Scope, classify
 from pricedin.normalize.tags import CHAINS
@@ -25,12 +28,15 @@ app = Flask(__name__)
 COMPANY_CHARTS = (
     ("revenue", "Revenue", "bar", None),
     ("operating_margin", "Operating margin", "line", None),
+    ("net_income", "Net income", "bar", "(attributable to the company)"),
     (
         "fcf",
         "Free cash flow",
         "bar",
         "(operating cash flow, continuing operations first, minus capex; SBC not deducted)",
     ),
+    ("sbc", "Stock-based compensation", "bar", "(the add-back on the cash flow statement)"),
+    ("diluted_shares", "Diluted shares", "line", "(weighted average for the year)"),
 )
 
 
@@ -98,6 +104,16 @@ def _usd(value: float) -> str:
     return f"${value / 1e6:,.0f}M"
 
 
+def _amount(value: float, unit: str) -> str:
+    return f"{value / 1e6:,.0f}M shares" if unit == "shares" else _usd(value)
+
+
+def _ratio(factor: float) -> str:
+    """A split factor as a ratio: 4.0 -> "4:1", 0.125 -> "1:8"."""
+    f = Fraction(factor).limit_denominator(1000)
+    return f"{f.numerator}:{f.denominator}"
+
+
 def _warnings(stmts: Statements, concepts: set[str], ends: set[date]) -> list[str]:
     """Plain-language notes about breaks, stale values and flags shown on one chart."""
     notes = []
@@ -106,7 +122,8 @@ def _warnings(stmts: Statements, concepts: set[str], ends: set[date]) -> list[st
             notes.append(
                 f"{stmts.label(b.prev_end)} → {stmts.label(b.end)}: basis change in "
                 f"{b.concept.replace('_', ' ')}. The 10-K filed {b.after.filed} restated "
-                f"{stmts.label(b.end)} from {_usd(b.before.value)} to {_usd(b.after.value)} "
+                f"{stmts.label(b.end)} from {_amount(b.before.value, b.before.unit)} to "
+                f"{_amount(b.after.value, b.after.unit)} "
                 f"({b.change:+.1%}); {stmts.label(b.prev_end)} and earlier are on the old "
                 "basis, so growth across this point isn't comparable."
             )
@@ -116,14 +133,41 @@ def _warnings(stmts: Statements, concepts: set[str], ends: set[date]) -> list[st
             notes.append(
                 f"{stmts.label(s.end)} {s.concept.replace('_', ' ')} may be outdated: the 10-K "
                 f"filed {s.newer_filed} (accn {s.newer_accession}) reports this year, but not "
-                f"under the tags PricedIn reads. Shown: {_usd(s.used.value)} from the 10-K "
+                f"under the tags PricedIn reads. Shown: {_amount(s.used.value, s.used.unit)} "
+                "from the 10-K "
                 f"filed {s.used.filed}."
                 + (f" Related tags there (values on the coverage page): {hint}." if hint else "")
             )
+    for concept in sorted(concepts):
+        by_factor: dict[float, list[date]] = defaultdict(list)
+        for end, fact in stmts.series(concept).items():
+            if end in ends and fact.split_factor != 1:
+                by_factor[fact.split_factor].append(end)
+        if not by_factor:
+            continue
+        spans = ", ".join(
+            f"{_span(stmts, years)} {_ratio(factor)}" for factor, years in by_factor.items()
+        )
+        found = "; ".join(
+            f"{_ratio(sp.ratio)} (the 10-K filed {sp.after.filed} restated "
+            f"{stmts.label(sp.end)} from {_amount(sp.before.value, sp.before.unit)} to "
+            f"{_amount(sp.after.value, sp.after.unit)})"
+            for sp in stmts.splits
+            if sp.concept == concept
+        )
+        notes.append(
+            f"Split-adjusted {concept.replace('_', ' ')}: {spans}, so earlier years compare "
+            f"with later ones. Splits found: {found}."
+        )
     for f in stmts.flags:
         if f.concept in concepts and f.end in ends:
             notes.append(f"{stmts.label(f.end)}: {f.message}")
     return notes
+
+
+def _span(stmts: Statements, ends: list[date]) -> str:
+    first, last = stmts.label(min(ends)), stmts.label(max(ends))
+    return first if first == last else f"{first}–{last}"
 
 
 def _chart(stmts: Statements, name: str, title: str, kind: str, subtitle: str | None):
@@ -132,9 +176,17 @@ def _chart(stmts: Statements, name: str, title: str, kind: str, subtitle: str | 
     inputs = [stmts.series(c) for c in series.inputs]
     concepts = {by_end[end].concept for by_end in inputs for end in values}
     stale = {(s.concept, s.end) for s in stmts.stale}
-    points = []
-    for end, value in values.items():
+    points, gaps = [], []
+    ends = list(values)
+    for prev, end in zip([None, *ends], ends, strict=False):
+        # Missing years stay visible as empty slots (DECISIONS #51)
+        years = range(nominal_year(prev) + 1, nominal_year(end)) if prev else range(0)
+        missing = [stmts.year_label(y) for y in years]
+        if missing:
+            gaps.append(missing[0] if len(missing) == 1 else f"{missing[0]}–{missing[-1]}")
+            points.extend({"label": label, "value": None, "stale": False} for label in missing)
         facts = [by_end[end] for by_end in inputs]
+        value = values[end]
         points.append(
             {
                 "label": stmts.label(end),
@@ -145,6 +197,7 @@ def _chart(stmts: Statements, name: str, title: str, kind: str, subtitle: str | 
                 "mixed": len({f.accession for f in facts}) > 1,
                 "sources": [
                     f"{f.source_tag}: {f.form} filed {f.filed.isoformat()}, accn {f.accession}"
+                    + (f", split-adjusted {_ratio(f.split_factor)}" if f.split_factor != 1 else "")
                     for f in facts
                 ],
             }
@@ -160,7 +213,12 @@ def _chart(stmts: Statements, name: str, title: str, kind: str, subtitle: str | 
         "unit": series.unit,
         "points": points,
         "breaks": breaks,
-        "warnings": _warnings(stmts, concepts, set(values)),
+        "warnings": _warnings(stmts, concepts, set(values))
+        + [
+            f"No data for {g}. Years on either side may be on different bases (a stock split, "
+            "for instance), so growth isn't computed across the gap."
+            for g in gaps
+        ],
         "note": None,  # shown above the chart
         "unavailable": None,  # shown instead of the chart
     }
@@ -189,6 +247,11 @@ def company(ticker: str):
     if any(f.value <= 0 for f in s.series("revenue").values()):
         charts["operating_margin"]["note"] = (
             "Margins aren't computed for years with zero or negative revenue."
+        )
+    if not s.series("sbc"):
+        charts["sbc"]["unavailable"] = (
+            "This company's cash flow statement doesn't report stock-based compensation under "
+            "the standard tag PricedIn reads, so it isn't shown."
         )
     if s.series("operating_cash_flow") and not s.series("capex"):
         charts["fcf"]["unavailable"] = (
@@ -222,7 +285,8 @@ def coverage(ticker: str):
         rows=rows,
         stale=stale,
         conflicts=conflicts,
-        usd=_usd,
+        amount=_amount,
+        ratio=_ratio,
         ua_error=_user_agent_status(),
     )
 

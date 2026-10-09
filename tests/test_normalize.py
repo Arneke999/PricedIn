@@ -1,6 +1,8 @@
 import json
 from datetime import date
 
+import pytest
+
 from pricedin.normalize import edgar
 
 Y2019, Y2020 = date(2019, 12, 31), date(2020, 12, 31)
@@ -21,8 +23,8 @@ def entry(val, year, form="10-K", filed=None, accn="a", start=None, end=None, fy
     }
 
 
-def companyfacts(tags: dict[str, list[dict]], cik=1) -> bytes:
-    facts = {tag: {"units": {"USD": entries}} for tag, entries in tags.items()}
+def companyfacts(tags: dict[str, list[dict]], cik=1, unit="USD") -> bytes:
+    facts = {tag: {"units": {unit: entries}} for tag, entries in tags.items()}
     return json.dumps({"cik": cik, "entityName": "Test Co", "facts": {"us-gaap": facts}}).encode()
 
 
@@ -298,3 +300,188 @@ def test_combined_capex_tag_is_used_alone():
     s = resolve({"PaymentsToAcquireProductiveAssets": [entry(1273, 2025)]})
     capex = s.series("capex")[date(2025, 12, 31)]
     assert (capex.value, capex.source_tag) == (1273, "PaymentsToAcquireProductiveAssets")
+
+
+DILUTED = "WeightedAverageNumberOfDilutedSharesOutstanding"
+
+
+def resolve_shares(tags):
+    return edgar.statements(companyfacts(tags, unit="shares"))
+
+
+def test_share_counts_read_only_the_shares_unit():
+    s = resolve_shares({DILUTED: [entry(100, 2023)]})
+    assert s.series("diluted_shares")[Y2023].unit == "shares"
+    assert resolve({DILUTED: [entry(100, 2023)]}).series("diluted_shares") == {}
+
+
+def test_stock_split_rescales_earlier_years():
+    # The 2025 10-K restates 2023 after a 4:1 split; 2022 is only in the pre-split 10-K.
+    s = resolve_shares(
+        {
+            DILUTED: [
+                entry(100, 2022, filed="2024-02-01", accn="a"),
+                entry(98, 2023, filed="2024-02-01", accn="a"),
+                entry(392, 2023, filed="2025-02-01", accn="b"),
+                entry(380, 2024, filed="2025-02-01", accn="b"),
+            ]
+        }
+    )
+    shares = s.series("diluted_shares")
+    assert [f.value for f in shares.values()] == [400, 392, 380]
+    assert (shares[Y2022].split_factor, shares[Y2022].as_reported) == (4, 100)
+    assert shares[Y2023].split_factor == 1
+    [split] = s.splits
+    assert (split.end, split.ratio, split.before.value, split.after.value) == (Y2023, 4, 98, 392)
+    assert s.breaks == []
+
+
+def test_reverse_split_rescales_earlier_years():
+    s = resolve_shares(
+        {
+            DILUTED: [
+                entry(800, 2022, filed="2024-02-01", accn="a"),
+                entry(784, 2023, filed="2024-02-01", accn="a"),
+                entry(98, 2023, filed="2025-02-01", accn="b"),
+            ]
+        }
+    )
+    assert s.series("diluted_shares")[Y2022].value == 100
+    assert s.splits[0].ratio == 1 / 8
+
+
+def test_splits_compound():
+    s = resolve_shares(
+        {
+            DILUTED: [
+                entry(100, 2021, filed="2023-02-01", accn="a"),
+                entry(100, 2022, filed="2023-02-01", accn="a"),
+                entry(200, 2022, filed="2024-02-01", accn="b"),
+                entry(200, 2023, filed="2024-02-01", accn="b"),
+                entry(600, 2023, filed="2025-02-01", accn="c"),
+                entry(600, 2024, filed="2025-02-01", accn="c"),
+            ]
+        }
+    )
+    shares = s.series("diluted_shares")
+    assert [f.value for f in shares.values()] == [600, 600, 600, 600]
+    assert shares[Y2021].split_factor == 6
+
+
+def test_split_factor_follows_the_filing_not_the_year():
+    # The post-split 10-K tags 2021 and 2023 but not 2022, so 2022 comes from the
+    # pre-split 10-K and still needs the 2:1 factor.
+    s = resolve_shares(
+        {
+            DILUTED: [
+                entry(100, 2021, filed="2023-02-01", accn="a"),
+                entry(100, 2022, filed="2023-02-01", accn="a"),
+                entry(200, 2021, filed="2024-02-01", accn="b"),
+                entry(200, 2023, filed="2024-02-01", accn="b"),
+            ]
+        }
+    )
+    assert [f.value for f in s.series("diluted_shares").values()] == [200, 200, 200]
+
+
+def test_three_for_two_split():
+    s = resolve_shares(
+        {
+            DILUTED: [
+                entry(100, 2022, filed="2024-02-01", accn="a"),
+                entry(100, 2023, filed="2024-02-01", accn="a"),
+                entry(150, 2023, filed="2025-02-01", accn="b"),
+            ]
+        }
+    )
+    assert s.series("diluted_shares")[Y2022].value == 150
+    assert s.splits[0].ratio == 1.5
+
+
+@pytest.mark.parametrize("restated", [210, 7330])  # 2.1x and 73.3x are not split ratios
+def test_ratios_that_are_not_stock_splits_stay_breaks(restated):
+    s = resolve_shares(
+        {
+            DILUTED: [
+                entry(100, 2022, filed="2024-02-01", accn="a"),
+                entry(100, 2023, filed="2024-02-01", accn="a"),
+                entry(restated, 2023, filed="2025-02-01", accn="b"),
+            ]
+        }
+    )
+    assert s.splits == []
+    assert len(s.breaks) == 1
+
+
+def test_stale_share_count_is_split_adjusted_and_hinted_in_shares():
+    # The post-split 10-K presents 2021 (revenue) but tags its share count under another tag.
+    hint = "WeightedAverageNumberOfDilutedSharesOutstandingRestated"
+    facts = {
+        DILUTED: {
+            "units": {
+                "shares": [
+                    entry(100, 2021, filed="2023-02-01", accn="a"),
+                    entry(100, 2022, filed="2023-02-01", accn="a"),
+                    entry(400, 2022, filed="2024-02-01", accn="b"),
+                ]
+            }
+        },
+        hint: {"units": {"shares": [entry(400, 2021, filed="2024-02-01", accn="b")]}},
+        "Revenues": {"units": {"USD": [entry(9, 2021, filed="2024-02-01", accn="b")]}},
+    }
+    body = json.dumps({"cik": 1, "entityName": "Test Co", "facts": {"us-gaap": facts}})
+    s = edgar.statements(body.encode())
+    [stale] = [x for x in s.stale if x.concept == "diluted_shares"]
+    assert stale.used.value == 400
+    assert stale.hints == ((hint, 400.0),)
+
+
+def test_basic_shares_differing_from_diluted_is_not_a_conflict():
+    basic = "WeightedAverageNumberOfSharesOutstandingBasic"
+    s = resolve_shares({DILUTED: [entry(102, 2023)], basic: [entry(100, 2023)]})
+    assert s.series("diluted_shares")[Y2023].value == 102
+    assert s.conflicts == []
+
+
+def test_share_restatement_that_is_not_a_split_stays_a_break():
+    s = resolve_shares(
+        {
+            DILUTED: [
+                entry(100, 2022, filed="2024-02-01", accn="a"),
+                entry(100, 2023, filed="2024-02-01", accn="a"),
+                entry(130, 2023, filed="2025-02-01", accn="b"),
+            ]
+        }
+    )
+    assert s.splits == []
+    assert len(s.breaks) == 1
+    assert s.series("diluted_shares")[Y2022].value == 100
+
+
+def test_scaling_errors_are_breaks_not_splits():
+    # One 10-K tagged the count in thousands: a 1000x jump is not a stock split.
+    s = resolve_shares(
+        {
+            DILUTED: [
+                entry(100, 2022, filed="2024-02-01", accn="a"),
+                entry(100, 2023, filed="2024-02-01", accn="a"),
+                entry(100_000, 2023, filed="2025-02-01", accn="b"),
+            ]
+        }
+    )
+    assert s.splits == []
+    assert len(s.breaks) == 1
+
+
+def test_dollar_amounts_are_never_split_adjusted():
+    s = resolve(
+        {
+            "Revenues": [
+                entry(100, 2022, filed="2024-02-01", accn="a"),
+                entry(100, 2023, filed="2024-02-01", accn="a"),
+                entry(200, 2023, filed="2025-02-01", accn="b"),
+            ]
+        }
+    )
+    assert s.splits == []
+    assert s.series("revenue")[Y2022].value == 100

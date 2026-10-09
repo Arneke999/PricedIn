@@ -7,6 +7,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import date
+from fractions import Fraction
 
 from pricedin.normalize.restated import SAME_START, annual, filing_key, in_window, nominal_year
 from pricedin.normalize.schema import (
@@ -15,6 +16,7 @@ from pricedin.normalize.schema import (
     Fact,
     Flag,
     Period,
+    Split,
     Stale,
     Statements,
     pct_change,
@@ -25,11 +27,18 @@ from pricedin.normalize.tags import (
     CHAINS,
     CONTRACT_REVENUE,
     HINTS,
+    NARROWER,
     NON_CONTRACT_REVENUE,
+    UNITS,
 )
 
 # Recast breaks smaller than this are rounding, not a change of basis (golden tolerance).
 BREAK_THRESHOLD = 0.005
+# Stock-split ratios recognised (reverse splits are their inverses). Any other ratio,
+# including 1000x scaling errors in the tagging, stays a break.
+SPLIT_RATIOS = tuple(
+    Fraction(n) for n in (2, 3, 4, 5, 6, 7, 8, 10, 12, 15, 20, 25, 30, 40, 50, 100)
+) + (Fraction(3, 2), Fraction(4, 3), Fraction(5, 4), Fraction(5, 2))
 
 
 def ticker_index(body: bytes) -> dict[str, tuple[int, str]]:
@@ -65,7 +74,7 @@ class _Candidate:
             concept=concept,
             period=self.period,
             value=float(self.entry["val"]),
-            unit="USD",
+            unit=_unit(concept),
             source_tag=self.tag,
             accession=self.entry["accn"],
             form=self.entry["form"],
@@ -74,8 +83,12 @@ class _Candidate:
         )
 
 
-def _usd_annual(source: _Source, tag: str):
-    return annual(source.gaap.get(tag, {}).get("units", {}).get("USD", []))
+def _unit(concept: str) -> str:
+    return UNITS.get(concept, "USD")
+
+
+def _annual(source: _Source, tag: str, unit: str = "USD"):
+    return annual(source.gaap.get(tag, {}).get("units", {}).get(unit, []))
 
 
 def _index(sources: Sequence[_Source]) -> dict[str, _Filing]:
@@ -103,7 +116,7 @@ def _software(sources: Sequence[_Source]) -> dict[tuple[str, date], tuple[str, d
     found: dict[tuple[str, date], tuple[str, dict]] = {}
     for tag in CAPEX_SOFTWARE:
         for source in sources:
-            for period, entry in _usd_annual(source, tag):
+            for period, entry in _annual(source, tag):
                 found.setdefault((entry["accn"], period.end), (tag, entry))
     return found
 
@@ -130,11 +143,66 @@ def _hints(sources: Sequence[_Source], concept: str, accn: str, end: date) -> tu
         for tag in source.gaap:
             if tag in CHAINS[concept] or not any(h in tag for h in HINTS[concept]):
                 continue
-            for period, entry in _usd_annual(source, tag):
+            for period, entry in _annual(source, tag, _unit(concept)):
                 if entry["accn"] == accn and period.end == end:
                     found.append((tag, float(entry["val"])))
                     break
     return tuple(found[:5])
+
+
+def _split_ratio(before: float, after: float) -> float | None:
+    """after / before when it is a stock-split ratio (4:1, 3:2, 1:8, ...), else None."""
+    if before <= 0 or after <= 0:
+        return None
+    ratio = after / before
+    up = ratio if ratio >= 1 else 1 / ratio
+    for clean in SPLIT_RATIOS:
+        if abs(up / clean - 1) <= BREAK_THRESHOLD:
+            return float(clean if ratio >= 1 else 1 / clean)
+    return None
+
+
+def _split_factors(
+    concept: str, candidates: dict[date, list[_Candidate]]
+) -> tuple[dict[str, float], list[Split]]:
+    """Per filing, the factor that puts its share counts on the newest filing's basis
+    (DECISIONS #50).
+
+    Each filing is compared with the nearest newer filing that reports one of the same
+    years; a split ratio between their values for that year is a stock split. A filing
+    that shares no year with a newer one keeps the next newer filing's basis.
+    """
+    by_filing: dict[str, dict[date, _Candidate]] = defaultdict(dict)
+    for end, found in candidates.items():
+        for c in sorted(found, key=lambda c: c.rank):
+            by_filing[c.entry["accn"]].setdefault(end, c)
+    order = sorted(
+        by_filing, key=lambda a: filing_key(next(iter(by_filing[a].values())).entry), reverse=True
+    )
+    factors: dict[str, float] = {}
+    splits: list[Split] = []
+    for i, accn in enumerate(order):
+        factor = factors[order[i - 1]] if i else 1.0
+        for newer in reversed(order[:i]):
+            shared = by_filing[accn].keys() & by_filing[newer].keys()
+            if not shared:
+                continue
+            end = max(shared)
+            old, new = by_filing[accn][end], by_filing[newer][end]
+            ratio = _split_ratio(float(old.entry["val"]), float(new.entry["val"]))
+            factor = factors[newer] * (ratio or 1.0)
+            if ratio:
+                splits.append(Split(concept, end, ratio, old.fact(concept), new.fact(concept)))
+            break
+        factors[accn] = factor
+    return factors, splits
+
+
+def _adjusted(fact: Fact, factors: dict[str, float]) -> Fact:
+    factor = factors.get(fact.accession, 1.0)
+    if factor == 1.0:
+        return fact
+    return replace(fact, value=fact.value * factor, split_factor=factor)
 
 
 def _fy_offset(primary: _Source, filings: dict[str, _Filing]) -> int:
@@ -175,7 +243,7 @@ def statements(body: bytes, predecessors: Sequence[bytes] = ()) -> Statements:
         candidates = by_concept[concept] = defaultdict(list)
         for rank, tag in enumerate(chain):
             for source in sources:
-                for period, entry in _usd_annual(source, tag):
+                for period, entry in _annual(source, tag, _unit(concept)):
                     if in_window(period.end, filings[entry["accn"]].own_end):
                         candidates[period.end].append(
                             _Candidate(rank, tag, period, entry, source.cik)
@@ -184,6 +252,10 @@ def statements(body: bytes, predecessors: Sequence[bytes] = ()) -> Statements:
 
     software = _software(sources)
     for concept, candidates in by_concept.items():
+        factors: dict[str, float] = {}
+        if _unit(concept) == "shares":
+            factors, splits = _split_factors(concept, candidates)
+            result.splits.extend(splits)
         resolved: dict[date, Fact] = {}
         for end in sorted(candidates):
             found = candidates[end]
@@ -192,16 +264,18 @@ def statements(body: bytes, predecessors: Sequence[bytes] = ()) -> Statements:
                 (c for c in found if filing_key(c.entry) == newest), key=lambda c: c.rank
             )
             winner = in_filing[0]
-            chosen = resolved[end] = _filing_fact(concept, in_filing, software)
+            chosen = resolved[end] = _adjusted(_filing_fact(concept, in_filing, software), factors)
 
             for other in in_filing[1:]:
                 same_year = abs(other.period.start - winner.period.start) <= SAME_START
+                other_fact = _adjusted(other.fact(concept), factors)
                 if (
                     same_year
                     and other.tag != winner.tag
-                    and other.fact(concept).value != chosen.value
+                    and other.tag not in NARROWER.get(concept, ())
+                    and other_fact.value != chosen.value
                 ):
-                    result.conflicts.append(Conflict(concept, end, chosen, other.fact(concept)))
+                    result.conflicts.append(Conflict(concept, end, chosen, other_fact))
 
             newer = [
                 f
@@ -218,7 +292,7 @@ def statements(body: bytes, predecessors: Sequence[bytes] = ()) -> Statements:
 
             if winner.tag in CONTRACT_REVENUE:
                 for source in sources:
-                    for period, entry in _usd_annual(source, NON_CONTRACT_REVENUE):
+                    for period, entry in _annual(source, NON_CONTRACT_REVENUE):
                         if entry["accn"] == chosen.accession and period.end == end:
                             result.flags.append(
                                 Flag(
@@ -241,7 +315,7 @@ def statements(body: bytes, predecessors: Sequence[bytes] = ()) -> Statements:
             )
             if not restated:
                 continue
-            before = _filing_fact(concept, restated, software)
+            before = _adjusted(_filing_fact(concept, restated, software), factors)
             change = pct_change(before.value, resolved[end].value)
             if change is not None and abs(change) > BREAK_THRESHOLD:
                 result.breaks.append(Break(concept, end, prev_end, before, resolved[end]))

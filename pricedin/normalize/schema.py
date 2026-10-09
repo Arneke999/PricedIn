@@ -33,6 +33,13 @@ class Fact:
     form: str
     filed: date
     cik: int
+    # Earlier years of a share count are multiplied onto the latest basis (DECISIONS #50)
+    split_factor: float = 1.0
+
+    @property
+    def as_reported(self) -> float:
+        """The value as the filing printed it, before any split adjustment."""
+        return self.value / self.split_factor
 
 
 def pct_change(old: float, new: float) -> float | None:
@@ -73,6 +80,22 @@ class Break:
 
 
 @dataclass(frozen=True)
+class Split:
+    """A newer 10-K restated a share count by a stock-split ratio (DECISIONS #50).
+
+    `before` and `after` are year `end` as the older and newer filing reported it. Values
+    from the older filing and those before it are multiplied by `ratio` (times any later
+    splits) to put them on the newest basis; `Fact.split_factor` holds the product.
+    """
+
+    concept: str
+    end: date
+    ratio: float
+    before: Fact
+    after: Fact
+
+
+@dataclass(frozen=True)
 class Stale:
     """A newer 10-K reports this year, but under none of the chain's tags (DECISIONS #25)."""
 
@@ -99,6 +122,7 @@ class Statements:
     facts: dict[str, dict[date, Fact]]
     conflicts: list[Conflict] = field(default_factory=list)
     breaks: list[Break] = field(default_factory=list)
+    splits: list[Split] = field(default_factory=list)
     stale: list[Stale] = field(default_factory=list)
     flags: list[Flag] = field(default_factory=list)
     # Company naming: label year = nominal year of the end date + offset (DECISIONS #29)
@@ -112,4 +136,7 @@ class Statements:
     def label(self, end: date) -> str:
         from pricedin.normalize.restated import nominal_year
 
-        return f"FY{nominal_year(end) + self.fy_offset}"
+        return self.year_label(nominal_year(end))
+
+    def year_label(self, nominal_year: int) -> str:
+        return f"FY{nominal_year + self.fy_offset}"

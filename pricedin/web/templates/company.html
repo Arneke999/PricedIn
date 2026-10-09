@@ -59,6 +59,7 @@
       const fmt = {
         usd: v => "$" + (v / 1e9).toFixed(1) + "B",
         ratio: v => (v * 100).toFixed(1) + "%",
+        shares: v => (v / 1e6).toLocaleString(undefined, { maximumFractionDigits: 0 }) + "M",
       };
       function render({ id, kind, unit, points, breaks }) {
         const el = document.getElementById(id);
@@ -71,6 +72,7 @@
             trigger: "axis",
             formatter: items => {
               const p = points[items[0].dataIndex];
+              if (p.value === null) return `<b>${p.label}</b>: no data`;
               const notes = [];
               if (p.weeks53) notes.push("53-week year");
               if (p.stale) notes.push("may be outdated, see note above the chart");

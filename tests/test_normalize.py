@@ -623,21 +623,28 @@ def test_debt_skips_leases_already_inside_the_debt_lines():  # TGT
     assert total == pytest.approx(16.4)
 
 
-def test_debt_sees_leases_inside_when_the_inclusive_tag_has_the_same_value():  # XOM
+def test_lease_halves_are_added_when_the_inclusive_tag_matches_the_plain_one():  # GOOGL 2023
     tags, total, problems = debt(
-        CommercialPaper=3.1,
-        LongTermDebtCurrent=6.2,
-        LongTermDebtAndCapitalLeaseObligationsCurrent=6.2,
-        LongTermDebtAndCapitalLeaseObligations=34.2,
-        FinanceLeaseLiability=2.7,
-        DebtCurrent=9.3,
+        LongTermDebtCurrent=1.0,
+        LongTermDebtNoncurrent=11.87,
+        LongTermDebtAndCapitalLeaseObligations=11.87,
+        FinanceLeaseLiabilityCurrent=0.283,
+        FinanceLeaseLiabilityNoncurrent=1.383,
     )
-    assert tags == [
-        "CommercialPaper",
-        "LongTermDebtCurrent",
-        "LongTermDebtAndCapitalLeaseObligations",
-    ]
+    assert total == pytest.approx(14.536)
     assert problems == []
+
+
+def test_lease_total_beside_a_lease_inclusive_debt_line_is_flagged():  # XOM
+    tags, total, [problem] = debt(
+        CommercialPaper=3.1e9,
+        LongTermDebtCurrent=6.2e9,
+        LongTermDebtAndCapitalLeaseObligations=34.2e9,
+        FinanceLeaseLiability=2.7e9,
+        DebtCurrent=9.3e9,
+    )
+    assert total == pytest.approx(43.5e9)
+    assert problem.startswith("Finance leases ($2.7B) are reported only as a total")
 
 
 def test_short_term_borrowings_plus_commercial_paper_when_that_ties_out():  # NEE

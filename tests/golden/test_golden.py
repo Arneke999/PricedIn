@@ -27,7 +27,20 @@ HERE = Path(__file__).parent
 GOLDEN = tomllib.loads((HERE / "values.toml").read_text())
 TOLERANCE = 0.005  # relative; filings round differently
 SCALE = {"usd": 1e6, "ratio": 0.01, "shares": 1e6}  # values.toml: millions; margins in %
-CAPEX_PARTS = ("capex_ppe", "capex_software")  # summed into capex (DECISIONS #40)
+# Lines Arne transcribed one by one, summed into the series they make up.
+PARTS = {
+    "capex": ("capex_ppe", "capex_software"),  # DECISIONS #40: both or neither
+    "equity": ("total_equity", "redeemable_nci"),  # #65
+    "debt": (
+        "short_term_debt",
+        "current_long_term_debt",
+        "long_term_debt",
+        "finance_leases_current",
+        "finance_leases_noncurrent",
+    ),
+    "cash_and_short_term_investments": ("cash", "short_term_investments", "marketable_securities"),
+}
+ALL_PARTS_REQUIRED = {"capex"}
 MIN_COMPANIES = 3  # golden set: 3-5 companies across sectors
 
 
@@ -40,12 +53,16 @@ def periods():
 
 def expected(values: dict) -> dict[str, float]:
     """Golden value per series name for one period."""
-    parts = [p for p in CAPEX_PARTS if p in values]
-    assert len(parts) in (0, len(CAPEX_PARTS)), f"capex needs all of {CAPEX_PARTS}: {parts}"
-    assert not (parts and "capex" in values), "give capex or its parts, not both"
-    out = {k: v for k, v in values.items() if k not in CAPEX_PARTS}
-    if parts:
-        out["capex"] = sum(values[p] for p in CAPEX_PARTS)
+    every_part = {p for parts in PARTS.values() for p in parts}
+    out = {k: v for k, v in values.items() if k not in every_part}
+    for series, parts in PARTS.items():
+        present = [p for p in parts if p in values]
+        if not present:
+            continue
+        if series in ALL_PARTS_REQUIRED:
+            assert present == list(parts), f"{series} needs all of {parts}: {present}"
+        assert series not in values, f"give {series} or its parts, not both"
+        out[series] = sum(values[p] for p in present)
     return out
 
 

@@ -13,6 +13,7 @@ from flask import Flask, redirect, render_template, request, url_for
 
 from pricedin import config
 from pricedin.data import archive, edgar
+from pricedin.metrics.returns import loss_years, statutory_years
 from pricedin.metrics.verified import VERIFIED
 from pricedin.normalize import edgar as normalize_edgar
 from pricedin.normalize.predecessors import PREDECESSORS, Predecessor, successor_signals
@@ -38,6 +39,12 @@ COMPANY_CHARTS = (
     ("fcf_after_sbc", "Free cash flow after SBC", "bar", "(free cash flow minus SBC)"),
     ("sbc", "Stock-based compensation", "bar", "(the add-back on the cash flow statement)"),
     ("diluted_shares", "Diluted shares", "line", "(weighted average for the year)"),
+    (
+        "roic",
+        "Return on invested capital",
+        "line",
+        "(after-tax operating income ÷ average invested capital; operating leases excluded)",
+    ),
 )
 
 
@@ -175,7 +182,8 @@ def _chart(stmts: Statements, name: str, title: str, kind: str, subtitle: str | 
     series = VERIFIED[name]
     values = series.values(stmts)
     inputs = [stmts.series(c) for c in series.inputs]
-    concepts = {by_end[end].concept for by_end in inputs for end in values}
+    # Some inputs may be absent in a year (no debt reported, an unusable tax rate)
+    concepts = {by_end[end].concept for by_end in inputs for end in values if end in by_end}
     stale = {(s.concept, s.end) for s in stmts.stale}
     points, gaps = [], []
     ends = list(values)
@@ -186,7 +194,7 @@ def _chart(stmts: Statements, name: str, title: str, kind: str, subtitle: str | 
         if missing:
             gaps.append(missing[0] if len(missing) == 1 else f"{missing[0]}–{missing[-1]}")
             points.extend({"label": label, "value": None, "stale": False} for label in missing)
-        facts = [by_end[end] for by_end in inputs]
+        facts = [by_end[end] for by_end in inputs if end in by_end]
         value = values[end]
         points.append(
             {
@@ -258,6 +266,34 @@ def company(ticker: str):
             "Stock-based compensation isn't reported for this company (see above), so free "
             "cash flow after SBC can't be computed."
         )
+    roic = charts["roic"]
+    if not any(p["value"] is not None for p in roic["points"]):
+        roic["unavailable"] = (
+            "ROIC can't be computed for this company from SEC structured data: operating "
+            "income or a balance-sheet line (equity, cash) isn't reported."
+        )
+    shown = {p["end"] for p in roic["points"] if p["value"] is not None}
+    fallback = [
+        s.label(end)
+        for end in statutory_years(
+            s.series("operating_income"), s.series("income_tax"), s.series("pretax_income")
+        )
+        if end.isoformat() in shown
+    ]
+    losses = [s.label(end) for end in loss_years(s.series("operating_income"))]
+    losses = [label for label in losses if label in {p["label"] for p in roic["points"]}]
+    notes = []
+    if fallback:
+        notes.append(
+            f"{', '.join(fallback)} {'uses' if len(fallback) == 1 else 'use'} the US statutory "
+            "tax rate (35% before 2018, 21% after): the effective rate was unusable (pretax loss "
+            "or a rate outside 0-50%)."
+        )
+    if losses:
+        notes.append(
+            f"{', '.join(losses)}: operating loss, so no tax is applied (NOPAT is the loss)."
+        )
+    roic["note"] = " ".join(notes) or None
     if s.series("operating_cash_flow") and not s.series("capex"):
         charts["fcf"]["unavailable"] = (
             "Capex isn't reported in SEC structured data for this company, so free cash flow "

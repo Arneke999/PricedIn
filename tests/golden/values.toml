@@ -9,10 +9,16 @@
 # millions (weighted average for the year).
 # Capex includes capitalized software (DECISIONS #40); FCF = operating cash flow - capex.
 # Net income is attributable to the company (#33, #47); SBC is the cash-flow add-back (#52).
+# ROIC (#53-#67): balances are year-end values, transcribed line by line as parts the test
+# sums (equity = total_equity + redeemable_nci; debt = short_term_debt +
+# current_long_term_debt + long_term_debt + finance leases; cash_and_short_term_investments =
+# cash + short_term_investments + marketable_securities). invested_capital is Arne's own sum;
+# roic in percent, from operating income, tax/pretax, and average invested capital.
 
 [GOOGL]
 cik = 1652044
 source = "10-K filed 2026-02-05, accession 0001652044-26-000018 (income p.50, cash flows p.53, EPS note p.82-83)"
+source_prior = "10-K filed 2025-02-05, accession 0001652044-25-000014 (balance sheet p.53, leases p.74, debt p.75)"
 
 [GOOGL."2025-12-31"]
 revenue = 402836                # Revenues
@@ -25,6 +31,18 @@ net_income = 132170             # Net income
 sbc = 24953                     # Stock-based compensation expense (cash flows)
 diluted_shares = 12230          # Number of shares used in per share computation, diluted, Consolidated
 fcf_after_sbc = 48313    # 73266 - 24953
+total_equity = 415265
+short_term_debt = 0             # commercial paper (prose: none)
+current_long_term_debt = 1996   # current portion of notes, inside accrued expenses (debt note)
+long_term_debt = 46547
+finance_leases_current = 441    # Leases note
+finance_leases_noncurrent = 2059
+cash = 30708
+marketable_securities = 96135   # current
+invested_capital = 339465
+pretax_income = 158826
+income_tax = 26656
+roic = 36.73
 
 [GOOGL."2024-12-31"]
 revenue = 350018
@@ -37,10 +55,34 @@ net_income = 100118
 sbc = 22785
 diluted_shares = 12447
 fcf_after_sbc = 49979    # 72764 - 22785
+total_equity = 325084
+short_term_debt = 2300          # commercial paper, $2.3 billion in prose
+current_long_term_debt = 999
+long_term_debt = 10883
+finance_leases_current = 235
+finance_leases_noncurrent = 1442
+cash = 23466
+marketable_securities = 72191
+invested_capital = 245286
+pretax_income = 119815
+income_tax = 19697
+roic = 43.45
+
+[GOOGL."2023-12-31"]
+total_equity = 283379
+short_term_debt = 0
+current_long_term_debt = 1000
+long_term_debt = 11870
+finance_leases_current = 283
+finance_leases_noncurrent = 1383
+cash = 24048
+marketable_securities = 86868
+invested_capital = 186999
 
 [COST]
 cik = 909832
 source = "10-K filed 2026-10-07, accession 0000909832-26-000093 (income p.48, cash flows p.52, EPS note p.77)"
+source_prior = "10-K filed 2025-10-08, accession 0000909832-25-000101 (balance sheet p.43, debt and leases p.56)"
 
 [COST."2026-08-30"]
 revenue = 303154                # Total revenue (net sales + membership fees)
@@ -53,6 +95,18 @@ net_income = 9226               # NET INCOME
 sbc = 924                       # Stock-based compensation (cash flows)
 diluted_shares = 444.427        # Shares used in calculation, Diluted: 444,427 thousand as printed
 fcf_after_sbc = 8458     # 9382 - 924
+total_equity = 35803
+short_term_debt = 0
+current_long_term_debt = 2248
+long_term_debt = 3914
+finance_leases_current = 94
+finance_leases_noncurrent = 1319
+cash = 20207
+short_term_investments = 1094
+invested_capital = 22077
+pretax_income = 12251
+income_tax = 3025
+roic = 40.72
 
 [COST."2025-08-31"]
 revenue = 275235
@@ -65,10 +119,34 @@ net_income = 8099
 sbc = 860
 diluted_shares = 444.803        # 444,803 thousand as printed
 fcf_after_sbc = 6977     # 7837 - 860
+total_equity = 29164
+short_term_debt = 0
+current_long_term_debt = 75
+long_term_debt = 5713
+finance_leases_current = 78
+finance_leases_noncurrent = 1401
+cash = 14161
+short_term_investments = 1123
+invested_capital = 21147
+pretax_income = 10818
+income_tax = 2719
+roic = 37.90
+
+[COST."2024-09-01"]
+total_equity = 23622
+short_term_debt = 0
+current_long_term_debt = 103    # debt note; no balance-sheet line
+long_term_debt = 5794
+finance_leases_current = 147
+finance_leases_noncurrent = 1351
+cash = 9906
+short_term_investments = 1238
+invested_capital = 19873
 
 [MA]
 cik = 1141391
 source = "10-K filed 2026-02-11, accession 0001141391-26-000013 (income p.81, cash flows p.86, EPS note p.99)"
+source_prior = "10-K filed 2025-02-12, accession 0001141391-25-000011 (balance sheet p.79)"
 
 [MA."2025-12-31"]
 revenue = 32791                 # Net revenue
@@ -82,6 +160,15 @@ net_income = 14968              # Net Income (the only net income line; tagged P
 sbc = 597                       # Share-based compensation (cash flows)
 diluted_shares = 906            # Diluted weighted-average shares outstanding
 fcf_after_sbc = 15836    # 16433 - 597
+total_equity = 7746
+short_term_debt = 749
+long_term_debt = 18251
+cash = 10566
+short_term_investments = 332    # "Investments" (current)
+invested_capital = 15848
+pretax_income = 18578
+income_tax = 3610
+roic = 95.70
 
 [MA."2024-12-31"]
 revenue = 28167
@@ -95,6 +182,24 @@ net_income = 12874
 sbc = 526
 diluted_shares = 927
 fcf_after_sbc = 13060    # 13586 - 526
+total_equity = 6515
+short_term_debt = 750
+long_term_debt = 17476
+cash = 8442
+short_term_investments = 330
+invested_capital = 15969
+pretax_income = 15254
+income_tax = 2380
+roic = 89.26
+
+[MA."2023-12-31"]
+total_equity = 6975
+redeemable_nci = 22             # outside Total Equity, counts as equity (#65)
+short_term_debt = 1337
+long_term_debt = 14344
+cash = 8588
+short_term_investments = 592
+invested_capital = 13498
 
 [GE]
 cik = 40545
@@ -117,6 +222,7 @@ diluted_shares = 1094
 [KO]
 cik = 21344
 source = "10-K filed 2026-02-20, accession 0001628280-26-010047 (income p.63, cash flows p.66)"
+source_prior = "10-K filed 2025-02-20, accession 0000021344-25-000011 (balance sheet p.66)"
 
 [KO."2025-12-31"]
 revenue = 47941                 # Net Operating Revenues
@@ -129,6 +235,17 @@ net_income = 13107              # Net Income Attributable to Shareowners of The 
 sbc = 279                       # Stock-based compensation expense (cash flows)
 diluted_shares = 4313           # Average Shares Outstanding - Diluted
 fcf_after_sbc = 5017     # 5296 - 279
+total_equity = 34275
+short_term_debt = 1551          # Loans and notes payable
+current_long_term_debt = 1822
+long_term_debt = 42119
+cash = 10270
+short_term_investments = 3602
+marketable_securities = 1934    # separate current line (#61)
+invested_capital = 63961
+pretax_income = 15998
+income_tax = 2861
+roic = 18.79
 
 [KO."2024-12-31"]
 revenue = 47061
@@ -141,3 +258,24 @@ net_income = 10631
 sbc = 286
 diluted_shares = 4320
 fcf_after_sbc = 4455     # 4741 - 286
+total_equity = 26372
+short_term_debt = 1499
+current_long_term_debt = 648
+long_term_debt = 42375
+cash = 10828
+short_term_investments = 2020
+marketable_securities = 1723
+invested_capital = 56323
+pretax_income = 13086
+income_tax = 2437
+roic = 14.49
+
+[KO."2023-12-31"]
+total_equity = 27480
+short_term_debt = 4557
+current_long_term_debt = 1960
+long_term_debt = 35547
+cash = 9366
+short_term_investments = 2997
+marketable_securities = 1300
+invested_capital = 55881

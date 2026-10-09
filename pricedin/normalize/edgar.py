@@ -168,15 +168,6 @@ def _first(found: dict[str, float], tags: Sequence[str]) -> str | None:
     return next((tag for tag in tags if tag in found), None)
 
 
-def _includes_leases(found: dict[str, float], used: str | None, pair: Sequence[str]) -> bool:
-    """Does the debt tag used already contain finance leases? Yes when it says so, or when
-    the filing reports the lease-inclusive variant at the same value."""
-    if used in t.INCLUDES_LEASES:
-        return True
-    other = next((tag for tag in pair if tag in t.INCLUDES_LEASES), None)
-    return used is not None and other in found and _close(found[used], found[other])
-
-
 def _debt(found: dict[str, float]) -> tuple[list[str], list[str]]:
     """Debt from one filing's tags at one year-end: the tags summed, and any problems
     (DECISIONS #60)."""
@@ -201,10 +192,10 @@ def _debt(found: dict[str, float]) -> tuple[list[str], list[str]]:
     whole_current = not short and current is None and t.DEBT_CURRENT in found
     if whole_current:
         short = [t.DEBT_CURRENT]
-    current_leases_inside = whole_current or _includes_leases(
-        found, current, t.CURRENT_LONG_TERM_DEBT
-    )
-    noncurrent_leases_inside = _includes_leases(found, noncurrent, t.NONCURRENT_LONG_TERM_DEBT)
+    # A lease-inclusive tag at the same value as the debt-only one holds no leases (GOOGL),
+    # so only the tag actually used decides.
+    current_leases_inside = whole_current or current in t.INCLUDES_LEASES
+    noncurrent_leases_inside = noncurrent in t.INCLUDES_LEASES
     debt = short + [tag for tag in (current, noncurrent) if tag]
     problems = []
 

@@ -40,7 +40,12 @@
         <p class="notice">{{ c.unavailable }}</p>
       {% else %}
         {% if c.note %}<p class="muted">{{ c.note }}</p>{% endif %}
-        {% if c.warnings %}
+        {% if c.warnings | length > 3 %}
+          <details class="warnings">
+            <summary>{{ c.warnings | length }} notes on the data behind this chart</summary>
+            <ul>{% for w in c.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+          </details>
+        {% elif c.warnings %}
           <ul class="warnings">{% for w in c.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
         {% endif %}
         <div id="{{ c.id }}" class="chart"></div>

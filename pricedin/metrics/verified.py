@@ -15,6 +15,7 @@ from typing import Literal
 
 from pricedin.metrics.cash_flow import free_cash_flow, free_cash_flow_after_sbc
 from pricedin.metrics.margins import operating_margin
+from pricedin.metrics.returns import invested_capital, roic
 from pricedin.normalize.schema import Fact, Statements
 
 
@@ -46,4 +47,26 @@ VERIFIED: dict[str, Series] = {
     "net_income": Series(("net_income",), line_item, "usd"),
     "sbc": Series(("sbc",), line_item, "usd"),
     "diluted_shares": Series(("diluted_shares",), line_item, "shares"),
+    "income_tax": Series(("income_tax",), line_item, "usd"),
+    "pretax_income": Series(("pretax_income",), line_item, "usd"),
+    "equity": Series(("equity",), line_item, "usd"),
+    "debt": Series(("debt",), line_item, "usd"),
+    "cash_and_short_term_investments": Series(
+        ("cash_and_short_term_investments",), line_item, "usd"
+    ),
+    "invested_capital": Series(
+        ("equity", "debt", "cash_and_short_term_investments"), invested_capital, "usd"
+    ),
+    "roic": Series(
+        (
+            "operating_income",
+            "income_tax",
+            "pretax_income",
+            "equity",
+            "debt",
+            "cash_and_short_term_investments",
+        ),
+        roic,
+        "ratio",
+    ),
 }

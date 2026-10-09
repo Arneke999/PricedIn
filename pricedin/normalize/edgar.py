@@ -9,7 +9,15 @@ from dataclasses import dataclass, replace
 from datetime import date
 from fractions import Fraction
 
-from pricedin.normalize.restated import SAME_START, annual, filing_key, in_window, nominal_year
+from pricedin.normalize import tags as t
+from pricedin.normalize.restated import (
+    SAME_START,
+    annual,
+    filing_key,
+    in_window,
+    nominal_year,
+    year_ends,
+)
 from pricedin.normalize.schema import (
     Break,
     Conflict,
@@ -27,8 +35,10 @@ from pricedin.normalize.tags import (
     CHAINS,
     CONTRACT_REVENUE,
     HINTS,
+    INSTANTS,
     NARROWER,
     NON_CONTRACT_REVENUE,
+    SUMMED,
     UNITS,
 )
 
@@ -91,13 +101,23 @@ def _annual(source: _Source, tag: str, unit: str = "USD"):
     return annual(source.gaap.get(tag, {}).get("units", {}).get(unit, []))
 
 
-def _index(sources: Sequence[_Source]) -> dict[str, _Filing]:
-    """Every annual filing and the fiscal year it's about."""
+def _reported(source: _Source, tag: str, concept: str, fiscal_ends: set[date]):
+    """A tag's annual values (or year-end balances) in the concept's unit."""
+    entries = source.gaap.get(tag, {}).get("units", {}).get(_unit(concept), [])
+    if concept in INSTANTS:
+        return year_ends(entries, fiscal_ends)
+    return annual(entries)
+
+
+def _index(sources: Sequence[_Source]) -> tuple[dict[str, _Filing], set[date]]:
+    """Every annual filing and the fiscal year it's about, and every fiscal-year end."""
     filings: dict[str, _Filing] = {}
+    fiscal_ends: set[date] = set()
     for source in sources:
         for concept in source.gaap.values():
             for entries in concept.get("units", {}).values():
                 for period, entry in annual(entries):
+                    fiscal_ends.add(period.end)
                     accn = entry["accn"]
                     f = filings.get(accn)
                     if f is None:
@@ -108,7 +128,7 @@ def _index(sources: Sequence[_Source]) -> dict[str, _Filing]:
                         f.own_end = period.end
                     if f.fy is None:
                         f.fy = entry.get("fy")
-    return filings
+    return filings, fiscal_ends
 
 
 def _software(sources: Sequence[_Source]) -> dict[tuple[str, date], tuple[str, dict]]:
@@ -136,14 +156,200 @@ def _filing_fact(concept: str, ranked: list[_Candidate], software: dict) -> Fact
     return fact
 
 
-def _hints(sources: Sequence[_Source], concept: str, accn: str, end: date) -> tuple:
+def _money(value: float) -> str:
+    return f"${value / 1e9:,.1f}B" if abs(value) >= 1e9 else f"${value / 1e6:,.0f}M"
+
+
+def _close(a: float, b: float) -> bool:
+    return abs(a - b) <= BREAK_THRESHOLD * max(abs(a), abs(b))
+
+
+def _first(found: dict[str, float], tags: Sequence[str]) -> str | None:
+    return next((tag for tag in tags if tag in found), None)
+
+
+def _includes_leases(found: dict[str, float], used: str | None, pair: Sequence[str]) -> bool:
+    """Does the debt tag used already contain finance leases? Yes when it says so, or when
+    the filing reports the lease-inclusive variant at the same value."""
+    if used in t.INCLUDES_LEASES:
+        return True
+    other = next((tag for tag in pair if tag in t.INCLUDES_LEASES), None)
+    return used is not None and other in found and _close(found[used], found[other])
+
+
+def _debt(found: dict[str, float]) -> tuple[list[str], list[str]]:
+    """Debt from one filing's tags at one year-end: the tags summed, and any problems
+    (DECISIONS #60)."""
+    current = _first(found, t.CURRENT_LONG_TERM_DEBT)
+    parts = [tag for tag in t.SHORT_TERM_BORROWING_PARTS if tag in found]
+    readings = [parts]
+    if t.SHORT_TERM_BORROWINGS in found:
+        # Usually the total of the parts; at some filers it excludes commercial paper (NEE).
+        readings = [[t.SHORT_TERM_BORROWINGS], [t.SHORT_TERM_BORROWINGS, *parts]]
+    short = readings[0]
+    if t.DEBT_CURRENT in found and len(readings) > 1 and parts:
+        current_part = found[current] if current else 0.0
+        short = next(
+            (
+                r
+                for r in readings
+                if _close(found[t.DEBT_CURRENT], sum(found[tag] for tag in r) + current_part)
+            ),
+            short,
+        )
+    noncurrent = _first(found, t.NONCURRENT_LONG_TERM_DEBT)
+    whole_current = not short and current is None and t.DEBT_CURRENT in found
+    if whole_current:
+        short = [t.DEBT_CURRENT]
+    current_leases_inside = whole_current or _includes_leases(
+        found, current, t.CURRENT_LONG_TERM_DEBT
+    )
+    noncurrent_leases_inside = _includes_leases(found, noncurrent, t.NONCURRENT_LONG_TERM_DEBT)
+    debt = short + [tag for tag in (current, noncurrent) if tag]
+    problems = []
+
+    leases = []
+    lease_current = _first(found, t.FINANCE_LEASES_CURRENT)
+    lease_noncurrent = _first(found, t.FINANCE_LEASES_NONCURRENT)
+    lease_total = _first(found, t.FINANCE_LEASES_TOTAL)
+    if lease_current or lease_noncurrent:
+        if lease_current and not current_leases_inside:
+            leases.append(lease_current)
+        if lease_noncurrent and not noncurrent_leases_inside:
+            leases.append(lease_noncurrent)
+    elif lease_total and not (current_leases_inside and noncurrent_leases_inside):
+        if current_leases_inside or noncurrent_leases_inside:
+            problems.append(
+                f"Finance leases ({_money(found[lease_total])}) are reported only as a total, "
+                "and part of them may already be inside the debt lines, so they aren't added."
+            )
+        else:
+            leases.append(lease_total)
+
+    if found.get(t.DISPOSAL_GROUP_LIABILITIES):
+        problems.append(
+            "Part of the business is held for sale or discontinued: its debt and cash sit "
+            "outside the lines PricedIn reads. If its profit is still in operating income, "
+            "invested capital is understated this year."
+        )
+    if not debt and t.DEBT_TOTAL in found:
+        debt = [t.DEBT_TOTAL]
+    total = sum(found[tag] for tag in debt)
+    with_leases = total + sum(found[tag] for tag in leases)
+    long_term = sum(found[tag] for tag in (current, noncurrent) if tag)
+    checks = [
+        (t.DEBT_TOTAL, (total, with_leases)),
+        (t.LONG_TERM_DEBT_TOTAL, (long_term, long_term + with_leases - total)),
+    ]
+    if not whole_current:
+        short_and_current = sum(found[tag] for tag in short) + (found[current] if current else 0)
+        lease_part = found[lease_current] if lease_current in leases else 0
+        checks.append((t.DEBT_CURRENT, (short_and_current, short_and_current + lease_part)))
+    for tag, sums in checks:
+        if tag in found and tag not in debt and not any(_close(found[tag], s) for s in sums):
+            problems.append(
+                f"The 10-K's own total {tag} is {_money(found[tag])}, but the debt lines "
+                f"PricedIn adds come to {_money(sums[0])}; debt may be miscounted this year."
+            )
+    return debt + leases, problems
+
+
+def _cash(found: dict[str, float]) -> tuple[list[str], list[str]]:
+    """Cash and short-term investments from one filing's tags at one year-end: the tags
+    summed, and any problems (DECISIONS #61)."""
+    cash = _first(found, t.CASH)
+    investments = _first(found, t.SHORT_TERM_INVESTMENTS)
+    parts = [tag for tag in (cash, investments, t.OTHER_SHORT_TERM_INVESTMENTS) if tag in found]
+    problems = []
+    if t.MARKETABLE_SECURITIES in found:
+        if any(tag in found for tag in t.MARKETABLE_SPLIT):
+            problems.append(
+                f"{t.MARKETABLE_SECURITIES} ({_money(found[t.MARKETABLE_SECURITIES])}) isn't "
+                "counted: the filing also splits marketable securities into current and "
+                "long-term, so it may include long-term ones."
+            )
+        else:
+            parts.append(t.MARKETABLE_SECURITIES)
+    if t.INVESTMENTS in found:
+        current = found.get(t.ASSETS_CURRENT)
+        if (
+            current is not None
+            and not any(tag in found for tag in t.INVESTMENT_SPLITS)
+            and sum(found[tag] for tag in parts) + found[t.INVESTMENTS] <= current
+        ):
+            parts.append(t.INVESTMENTS)
+        else:
+            problems.append(
+                f"{t.INVESTMENTS} ({_money(found[t.INVESTMENTS])}) isn't counted: the filing "
+                "doesn't show it's a short-term line."
+            )
+
+    total = found.get(t.CASH_AND_INVESTMENTS_TOTAL)
+    if total is None:
+        for tag in t.SHORT_TERM_INVESTMENTS:
+            if tag in found and tag != investments and not _close(found[tag], found[investments]):
+                problems.append(
+                    f"{tag} ({_money(found[tag])}) isn't counted; only {investments} is."
+                )
+        return parts, problems
+    separate = [tag for tag in parts if tag in t.MARKETABLE_LINES]
+    if _close(total, sum(found[tag] for tag in parts)) or (cash and _close(total, found[cash])):
+        # The parts add up, or short-term investments sit inside cash equivalents (TGT)
+        return [t.CASH_AND_INVESTMENTS_TOTAL], problems
+    inside = sum(found[tag] for tag in parts if tag not in separate)
+    if separate and _close(total, inside):
+        return [t.CASH_AND_INVESTMENTS_TOTAL, *separate], problems
+    problems.append(
+        f"The 10-K's cash and short-term investments total ({_money(total)}) doesn't match "
+        f"its parts ({_money(sum(found[tag] for tag in parts))}); PricedIn uses the total."
+    )
+    return [t.CASH_AND_INVESTMENTS_TOTAL], problems
+
+
+def _equity(found: dict[str, float]) -> tuple[list[str], list[str]]:
+    """Equity including minority holders, plus redeemable NCI outside equity (#59, #65)."""
+    base = _first(found, t.EQUITY)
+    if base is None:
+        return [], []
+    redeemable = _first(found, t.REDEEMABLE_NCI)
+    return [base, redeemable] if redeemable else [base], []
+
+
+def _summed(concept: str, ranked: list[_Candidate]) -> tuple[Fact | None, list[str]]:
+    """A summed concept from one filing's tags at one year-end, and any problems."""
+    found: dict[str, float] = {}
+    for c in ranked:
+        found.setdefault(c.tag, float(c.entry["val"]))
+    used, problems = {"equity": _equity, "debt": _debt}.get(concept, _cash)(found)
+    if not used:
+        return None, problems
+    fact = replace(
+        ranked[0].fact(concept),
+        value=sum(found[tag] for tag in used),
+        source_tag=" + ".join(used),
+    )
+    return fact, problems
+
+
+def _resolve(
+    concept: str, ranked: list[_Candidate], software: dict, factors: dict[str, float]
+) -> tuple[Fact | None, list[str]]:
+    """A filing's value for a concept and year, and any problems found summing it."""
+    if concept in SUMMED:
+        return _summed(concept, ranked)
+    return _adjusted(_filing_fact(concept, ranked, software), factors), []
+
+
+def _hints(
+    sources: Sequence[_Source], concept: str, accn: str, end: date, fiscal_ends: set[date]
+) -> tuple:
     """Tags in a filing, for a year, whose names look like the concept."""
     found = []
     for source in sources:
         for tag in source.gaap:
             if tag in CHAINS[concept] or not any(h in tag for h in HINTS[concept]):
                 continue
-            for period, entry in _annual(source, tag, _unit(concept)):
+            for period, entry in _reported(source, tag, concept, fiscal_ends):
                 if entry["accn"] == accn and period.end == end:
                     found.append((tag, float(entry["val"])))
                     break
@@ -226,7 +432,7 @@ def statements(body: bytes, predecessors: Sequence[bytes] = ()) -> Statements:
     """
     docs = [json.loads(b) for b in (body, *predecessors)]
     sources = [_Source(int(d["cik"]), d.get("facts", {}).get("us-gaap", {})) for d in docs]
-    filings = _index(sources)
+    filings, fiscal_ends = _index(sources)
 
     result = Statements(
         cik=sources[0].cik,
@@ -236,19 +442,22 @@ def statements(body: bytes, predecessors: Sequence[bytes] = ()) -> Statements:
         taxonomies={name: len(c) for name, c in docs[0].get("facts", {}).items()},
     )
     by_concept: dict[str, dict[date, list[_Candidate]]] = {}
-    # Years each filing presents in its statements: any chain tag of any concept. A note
+    # Years each filing presents in its statements: any chain tag of any concept, kept apart
+    # for balances (a balance sheet shows two year-ends, an income statement three). A note
     # that merely mentions an older year (2-year smaller-company statements) doesn't count.
-    presented: dict[str, set[date]] = defaultdict(set)
+    presented: dict[tuple[bool, str], set[date]] = defaultdict(set)
     for concept, chain in CHAINS.items():
+        balance = concept in INSTANTS
         candidates = by_concept[concept] = defaultdict(list)
         for rank, tag in enumerate(chain):
             for source in sources:
-                for period, entry in _annual(source, tag, _unit(concept)):
-                    if in_window(period.end, filings[entry["accn"]].own_end):
+                for period, entry in _reported(source, tag, concept, fiscal_ends):
+                    filing = filings.get(entry["accn"])
+                    if filing and in_window(period.end, filing.own_end, balance):
                         candidates[period.end].append(
                             _Candidate(rank, tag, period, entry, source.cik)
                         )
-                        presented[entry["accn"]].add(period.end)
+                        presented[(balance, entry["accn"])].add(period.end)
 
     software = _software(sources)
     for concept, candidates in by_concept.items():
@@ -264,9 +473,13 @@ def statements(body: bytes, predecessors: Sequence[bytes] = ()) -> Statements:
                 (c for c in found if filing_key(c.entry) == newest), key=lambda c: c.rank
             )
             winner = in_filing[0]
-            chosen = resolved[end] = _adjusted(_filing_fact(concept, in_filing, software), factors)
+            chosen, problems = _resolve(concept, in_filing, software, factors)
+            if chosen is None:
+                continue
+            resolved[end] = chosen
+            result.flags.extend(Flag(concept, end, problem) for problem in problems)
 
-            for other in in_filing[1:]:
+            for other in [] if concept in SUMMED else in_filing[1:]:
                 same_year = abs(other.period.start - winner.period.start) <= SAME_START
                 other_fact = _adjusted(other.fact(concept), factors)
                 if (
@@ -280,11 +493,11 @@ def statements(body: bytes, predecessors: Sequence[bytes] = ()) -> Statements:
             newer = [
                 f
                 for f in filings.values()
-                if (f.filed, f.accn) > newest and end in presented[f.accn]
+                if (f.filed, f.accn) > newest and end in presented[(concept in INSTANTS, f.accn)]
             ]
             if newer:
                 latest = max(newer, key=lambda f: (f.filed, f.accn))
-                hints = _hints(sources, concept, latest.accn, end)
+                hints = _hints(sources, concept, latest.accn, end, fiscal_ends)
                 stale = Stale(
                     concept, end, chosen, latest.accn, date.fromisoformat(latest.filed), hints
                 )
@@ -315,7 +528,9 @@ def statements(body: bytes, predecessors: Sequence[bytes] = ()) -> Statements:
             )
             if not restated:
                 continue
-            before = _adjusted(_filing_fact(concept, restated, software), factors)
+            before = _resolve(concept, restated, software, factors)[0]
+            if before is None:
+                continue
             change = pct_change(before.value, resolved[end].value)
             if change is not None and abs(change) > BREAK_THRESHOLD:
                 result.breaks.append(Break(concept, end, prev_end, before, resolved[end]))

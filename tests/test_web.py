@@ -56,7 +56,9 @@ def test_coverage_page_names_line_items_without_a_golden_test(client, monkeypatc
     html = client.get("/company/KO/coverage").get_data(as_text=True)
     note = re.search(r"No golden test yet for:\s+([^.]+)\.", html)
     assert note is not None
-    assert note.group(1) == "net income"
+    untested = note.group(1).split(", ")
+    assert "net income" in untested
+    assert "revenue" not in untested
 
 
 def test_stale_warning_names_related_tags_without_their_values():

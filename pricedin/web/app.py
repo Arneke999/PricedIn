@@ -35,6 +35,7 @@ COMPANY_CHARTS = (
         "bar",
         "(operating cash flow, continuing operations first, minus capex; SBC not deducted)",
     ),
+    ("fcf_after_sbc", "Free cash flow after SBC", "bar", "(free cash flow minus SBC)"),
     ("sbc", "Stock-based compensation", "bar", "(the add-back on the cash flow statement)"),
     ("diluted_shares", "Diluted shares", "line", "(weighted average for the year)"),
 )
@@ -252,6 +253,10 @@ def company(ticker: str):
         charts["sbc"]["unavailable"] = (
             "This company's cash flow statement doesn't report stock-based compensation under "
             "the standard tag PricedIn reads, so it isn't shown."
+        )
+        charts["fcf_after_sbc"]["unavailable"] = (
+            "Stock-based compensation isn't reported for this company (see above), so free "
+            "cash flow after SBC can't be computed."
         )
     if s.series("operating_cash_flow") and not s.series("capex"):
         charts["fcf"]["unavailable"] = (

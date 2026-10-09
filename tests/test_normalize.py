@@ -485,3 +485,339 @@ def test_dollar_amounts_are_never_split_adjusted():
     )
     assert s.splits == []
     assert s.series("revenue")[Y2022].value == 100
+
+
+@pytest.fixture
+def balances(monkeypatch):
+    """Balance-sheet concepts for these tests, until real ones are approved."""
+    monkeypatch.setitem(edgar.CHAINS, "equity", ("StockholdersEquity",))
+    monkeypatch.setitem(edgar.CHAINS, "cash", ("CashAndCashEquivalentsAtCarryingValue",))
+    monkeypatch.setitem(edgar.HINTS, "equity", ("Equity",))
+    monkeypatch.setitem(edgar.HINTS, "cash", ("Cash",))
+    monkeypatch.setattr(edgar, "INSTANTS", frozenset({"equity", "cash"}))
+
+
+def balance(val, end, filed, accn):
+    return {"val": val, "end": end, "form": "10-K", "filed": filed, "accn": accn}
+
+
+def test_year_end_balances_are_read(balances):
+    s = resolve(
+        {
+            "Revenues": [entry(10, 2023, accn="a"), entry(9, 2022, filed="2024-02-01", accn="a")],
+            "StockholdersEquity": [
+                balance(70, "2023-12-31", "2024-02-01", "a"),
+                balance(60, "2022-12-31", "2024-02-01", "a"),
+            ],
+        }
+    )
+    equity = s.series("equity")
+    assert {end: f.value for end, f in equity.items()} == {Y2022: 60, Y2023: 70}
+    assert equity[Y2023].period.days == 0
+
+
+def test_balances_older_than_the_balance_sheet_are_ignored(balances):
+    # The FY2023 10-K's equity statement repeats the 2021 year-end (restated to 51), but
+    # only the FY2021 10-K's balance sheet shows it.
+    s = resolve(
+        {
+            "Revenues": [
+                entry(6, 2021, filed="2022-02-01", accn="a"),
+                entry(8, 2023, filed="2024-02-01", accn="b"),
+            ],
+            "StockholdersEquity": [
+                balance(50, "2021-12-31", "2022-02-01", "a"),
+                balance(51, "2021-12-31", "2024-02-01", "b"),
+                balance(70, "2023-12-31", "2024-02-01", "b"),
+            ],
+        }
+    )
+    assert s.series("equity")[Y2021].value == 50
+
+
+def test_balances_off_a_fiscal_year_end_are_ignored(balances):
+    s = resolve(
+        {
+            "Revenues": [entry(10, 2023)],
+            "StockholdersEquity": [balance(70, "2023-06-30", "2024-02-01", "a")],
+        }
+    )
+    assert s.series("equity") == {}
+
+
+def test_a_three_year_income_statement_does_not_make_balances_stale(balances):
+    # The FY2023 10-K shows 2021 revenue, but its balance sheet stops at 2022.
+    s = resolve(
+        {
+            "Revenues": [
+                entry(6, 2021, filed="2022-02-01", accn="a"),
+                entry(6, 2021, filed="2024-02-01", accn="b"),
+                entry(7, 2022, filed="2024-02-01", accn="b"),
+                entry(8, 2023, filed="2024-02-01", accn="b"),
+            ],
+            "StockholdersEquity": [
+                balance(50, "2021-12-31", "2022-02-01", "a"),
+                balance(60, "2022-12-31", "2024-02-01", "b"),
+                balance(70, "2023-12-31", "2024-02-01", "b"),
+            ],
+        }
+    )
+    assert s.series("equity")[Y2021].value == 50
+    assert [x for x in s.stale if x.concept == "equity"] == []
+
+
+def test_stale_balance_is_flagged_with_hints(balances):
+    # The FY2023 10-K's balance sheet shows 2022 (cash), but tags equity under another tag.
+    hint = "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"
+    s = resolve(
+        {
+            "Revenues": [
+                entry(7, 2022, filed="2023-02-01", accn="a"),
+                entry(8, 2023, filed="2024-02-01", accn="b"),
+            ],
+            "StockholdersEquity": [
+                balance(60, "2022-12-31", "2023-02-01", "a"),
+                balance(70, "2023-12-31", "2024-02-01", "b"),
+            ],
+            "CashAndCashEquivalentsAtCarryingValue": [
+                balance(5, "2022-12-31", "2024-02-01", "b"),
+                balance(6, "2023-12-31", "2024-02-01", "b"),
+            ],
+            hint: [balance(61, "2022-12-31", "2024-02-01", "b")],
+        }
+    )
+    [stale] = [x for x in s.stale if x.concept == "equity"]
+    assert (stale.end, stale.used.value, stale.newer_accession) == (Y2022, 60, "b")
+    assert stale.hints == ((hint, 61.0),)
+
+
+# Debt and cash are summed from one filing's tags (DECISIONS #60, #61). Values in $B.
+
+
+def debt(**found):
+    tags, problems = edgar._debt(found)
+    return tags, sum(found[t] for t in tags), problems
+
+
+def test_debt_adds_components_and_both_lease_halves():  # WMT
+    tags, total, problems = debt(
+        ShortTermBorrowings=6.6,
+        LongTermDebtCurrent=3.5,
+        LongTermDebtNoncurrent=34.6,
+        FinanceLeaseLiabilityCurrent=0.9,
+        FinanceLeaseLiabilityNoncurrent=5.9,
+        FinanceLeaseLiability=6.8,
+    )
+    assert total == pytest.approx(51.5)
+    assert "FinanceLeaseLiability" not in tags
+    assert problems == []
+
+
+def test_debt_skips_leases_already_inside_the_debt_lines():  # TGT
+    tags, total, _ = debt(
+        LongTermDebtAndCapitalLeaseObligationsCurrent=2.1,
+        LongTermDebtAndCapitalLeaseObligations=14.3,
+        FinanceLeaseLiabilityCurrent=0.1,
+        FinanceLeaseLiabilityNoncurrent=2.0,
+    )
+    assert total == pytest.approx(16.4)
+
+
+def test_debt_sees_leases_inside_when_the_inclusive_tag_has_the_same_value():  # XOM
+    tags, total, problems = debt(
+        CommercialPaper=3.1,
+        LongTermDebtCurrent=6.2,
+        LongTermDebtAndCapitalLeaseObligationsCurrent=6.2,
+        LongTermDebtAndCapitalLeaseObligations=34.2,
+        FinanceLeaseLiability=2.7,
+        DebtCurrent=9.3,
+    )
+    assert tags == [
+        "CommercialPaper",
+        "LongTermDebtCurrent",
+        "LongTermDebtAndCapitalLeaseObligations",
+    ]
+    assert problems == []
+
+
+def test_short_term_borrowings_plus_commercial_paper_when_that_ties_out():  # NEE
+    tags, total, problems = debt(
+        ShortTermBorrowings=1e9, CommercialPaper=2e9, LongTermDebtCurrent=3e9, DebtCurrent=6e9
+    )
+    assert (total, problems) == (6e9, [])
+
+
+def test_short_term_borrowings_alone_when_they_include_commercial_paper():  # KO 2019-22
+    tags, total, problems = debt(
+        ShortTermBorrowings=3e9, CommercialPaper=2e9, LongTermDebtCurrent=1e9, DebtCurrent=4e9
+    )
+    assert (total, problems) == (4e9, [])
+
+
+def test_current_debt_total_is_used_only_without_components():
+    tags, total, _ = debt(DebtCurrent=5, LongTermDebtNoncurrent=20)
+    assert (tags, total) == (["DebtCurrent", "LongTermDebtNoncurrent"], 25)
+
+
+def test_lease_total_is_added_when_no_debt_line_includes_leases():
+    _, total, problems = debt(
+        LongTermDebtCurrent=1, LongTermDebtNoncurrent=10, FinanceLeaseLiability=2
+    )
+    assert (total, problems) == (13, [])
+
+
+def test_lease_total_is_flagged_when_part_may_be_inside():
+    _, total, [problem] = debt(
+        LongTermDebtCurrent=1e9,
+        LongTermDebtAndCapitalLeaseObligations=10e9,
+        FinanceLeaseLiability=2e9,
+    )
+    assert total == 11e9
+    assert problem.startswith("Finance leases ($2.0B) are reported only as a total")
+
+
+def test_debt_that_misses_the_filings_own_total_is_flagged():
+    _, _, [problem] = debt(
+        LongTermDebtCurrent=1e9,
+        LongTermDebtNoncurrent=10e9,
+        DebtLongtermAndShorttermCombinedAmount=15e9,
+    )
+    assert "DebtLongtermAndShorttermCombinedAmount is $15.0B" in problem
+    assert "come to $11.0B" in problem
+
+
+def cash(**found):
+    tags, problems = edgar._cash(found)
+    return tags, sum(found[t] for t in tags), problems
+
+
+def test_cash_uses_the_filings_total_when_the_parts_add_up():  # MSFT
+    tags, total, problems = cash(
+        CashCashEquivalentsAndShortTermInvestments=76.8,
+        CashAndCashEquivalentsAtCarryingValue=20.9,
+        ShortTermInvestments=55.9,
+    )
+    assert (tags, total, problems) == (["CashCashEquivalentsAndShortTermInvestments"], 76.8, [])
+
+
+def test_marketable_securities_outside_the_total_are_added():  # KO
+    tags, total, problems = cash(
+        CashCashEquivalentsAndShortTermInvestments=10,
+        CashAndCashEquivalentsAtCarryingValue=8,
+        OtherShortTermInvestments=2,
+        MarketableSecurities=1,
+    )
+    assert tags == ["CashCashEquivalentsAndShortTermInvestments", "MarketableSecurities"]
+    assert (total, problems) == (11, [])
+
+
+def test_short_term_investments_inside_cash_are_not_added_again():  # TGT
+    tags, total, problems = cash(
+        CashCashEquivalentsAndShortTermInvestments=5.5e9,
+        CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents=5.5e9,
+        ShortTermInvestments=4.6e9,
+    )
+    assert (total, problems) == (5.5e9, [])
+
+
+def test_a_total_that_doesnt_match_its_parts_wins_and_is_flagged():
+    tags, total, [problem] = cash(
+        CashCashEquivalentsAndShortTermInvestments=7e9,
+        CashAndCashEquivalentsAtCarryingValue=5e9,
+        ShortTermInvestments=4e9,
+    )
+    assert total == 7e9
+    assert "doesn't match its parts ($9.0B)" in problem
+
+
+def test_cash_parts_are_summed_without_a_total():  # AAPL
+    tags, total, problems = cash(
+        CashAndCashEquivalentsAtCarryingValue=35.9, MarketableSecuritiesCurrent=18.8
+    )
+    assert (total, problems) == (pytest.approx(54.7), [])
+
+
+def test_marketable_securities_that_may_be_long_term_are_flagged_not_counted():
+    tags, total, [problem] = cash(
+        CashAndCashEquivalentsAtCarryingValue=5e9,
+        MarketableSecurities=9e9,
+        MarketableSecuritiesCurrent=3e9,
+        MarketableSecuritiesNoncurrent=6e9,
+    )
+    assert total == 8e9
+    assert problem.startswith("MarketableSecurities ($9.0B) isn't counted")
+
+
+def test_a_second_short_term_investment_line_without_a_total_is_flagged():
+    tags, total, [problem] = cash(
+        CashAndCashEquivalentsAtCarryingValue=5e9,
+        ShortTermInvestments=3e9,
+        MarketableSecuritiesCurrent=2e9,
+    )
+    assert total == 8e9
+    assert (
+        problem
+        == "MarketableSecuritiesCurrent ($2.0B) isn't counted; only ShortTermInvestments is."
+    )
+
+
+def test_summed_balances_resolve_with_their_flags():
+    s = resolve(
+        {
+            "Revenues": [entry(10, 2023, filed="2024-02-01", accn="a")],
+            "LongTermDebtCurrent": [balance(1e9, "2023-12-31", "2024-02-01", "a")],
+            "LongTermDebtNoncurrent": [balance(10e9, "2023-12-31", "2024-02-01", "a")],
+            "DebtLongtermAndShorttermCombinedAmount": [
+                balance(15e9, "2023-12-31", "2024-02-01", "a")
+            ],
+        }
+    )
+    fact = s.series("debt")[Y2023]
+    assert (fact.value, fact.source_tag) == (11e9, "LongTermDebtCurrent + LongTermDebtNoncurrent")
+    assert [f.concept for f in s.flags] == ["debt"]
+    assert s.conflicts == []
+
+
+def test_redeemable_nci_outside_equity_is_added():  # MA 2023
+    tags, problems = edgar._equity(
+        {
+            "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest": 6.0,
+            "StockholdersEquity": 5.9,
+            "RedeemableNoncontrollingInterestEquityFairValue": 0.1,
+        }
+    )
+    assert tags == [
+        "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+        "RedeemableNoncontrollingInterestEquityFairValue",
+    ]
+
+
+def test_a_held_for_sale_business_flags_the_year():  # KO 2025
+    _, _, [problem] = debt(
+        LongTermDebtNoncurrent=40e9, LiabilitiesOfDisposalGroupIncludingDiscontinuedOperation=5e9
+    )
+    assert problem.startswith("Part of the business is held for sale or discontinued")
+
+
+def test_plain_investments_count_when_they_fit_in_current_assets():  # MA
+    tags, total, problems = cash(
+        CashAndCashEquivalentsAtCarryingValue=9e9, Investments=0.3e9, AssetsCurrent=25e9
+    )
+    assert (total, problems) == (9.3e9, [])
+
+
+@pytest.mark.parametrize(
+    "found",
+    [
+        # An insurer's whole portfolio, next to a short-term line (PGR)
+        {"ShortTermInvestments": 2e9, "Investments": 90e9, "AssetsCurrent": 100e9},
+        # An unclassified balance sheet (GE before 2019)
+        {"Investments": 40e9},
+        # Bigger than current assets can hold
+        {"Investments": 30e9, "AssetsCurrent": 25e9},
+    ],
+)
+def test_plain_investments_are_flagged_not_counted_otherwise(found):
+    tags, total, [problem] = cash(CashAndCashEquivalentsAtCarryingValue=1e9, **found)
+    assert "Investments" not in tags
+    assert problem.startswith("Investments (")

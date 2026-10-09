@@ -7,6 +7,68 @@ order is Arne's decision. edgartools' MIT gaap_mappings.json is a reading refere
 extending a chain.
 """
 
+# Debt is summed from components within one filing, and tied out against the filing's own
+# totals (DECISIONS #60). Short-term borrowings: ShortTermBorrowings, else its parts.
+SHORT_TERM_BORROWINGS = "ShortTermBorrowings"
+SHORT_TERM_BORROWING_PARTS = ("CommercialPaper", "OtherShortTermBorrowings")
+CURRENT_LONG_TERM_DEBT = ("LongTermDebtCurrent", "LongTermDebtAndCapitalLeaseObligationsCurrent")
+NONCURRENT_LONG_TERM_DEBT = ("LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligations")
+# All current debt in one number: used only when a filing reports no short-term component.
+DEBT_CURRENT = "DebtCurrent"
+# Debt tags whose value already includes finance (formerly capital) leases.
+INCLUDES_LEASES = frozenset(
+    {"LongTermDebtAndCapitalLeaseObligationsCurrent", "LongTermDebtAndCapitalLeaseObligations"}
+)
+FINANCE_LEASES_CURRENT = ("FinanceLeaseLiabilityCurrent", "CapitalLeaseObligationsCurrent")
+FINANCE_LEASES_NONCURRENT = ("FinanceLeaseLiabilityNoncurrent", "CapitalLeaseObligationsNoncurrent")
+FINANCE_LEASES_TOTAL = ("FinanceLeaseLiability", "CapitalLeaseObligations")
+# The filing's own totals: all debt, and long-term debt including its current part.
+DEBT_TOTAL = "DebtLongtermAndShorttermCombinedAmount"
+LONG_TERM_DEBT_TOTAL = "LongTermDebtAndCapitalLeaseObligationsIncludingCurrentMaturities"
+# A business held for sale or discontinued: its debt and cash sit outside the lines read
+# (DECISIONS #66), so the year gets a warning.
+DISPOSAL_GROUP_LIABILITIES = "LiabilitiesOfDisposalGroupIncludingDiscontinuedOperation"
+
+# Equity including minority holders (#59), plus redeemable NCI outside equity (#65).
+EQUITY = (
+    "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+    "StockholdersEquity",
+)
+REDEEMABLE_NCI = (
+    "RedeemableNoncontrollingInterestEquityCarryingAmount",
+    "RedeemableNoncontrollingInterestEquityFairValue",
+)
+
+# Cash and short-term investments (DECISIONS #54, #61). When the filing reports its own
+# total, that total is used, reconciled against the parts; otherwise the parts are summed.
+CASH_AND_INVESTMENTS_TOTAL = "CashCashEquivalentsAndShortTermInvestments"
+CASH = (
+    "CashAndCashEquivalentsAtCarryingValue",
+    "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
+)
+# One balance-sheet line, first found.
+SHORT_TERM_INVESTMENTS = (
+    "ShortTermInvestments",
+    "MarketableSecuritiesCurrent",
+    "AvailableForSaleSecuritiesDebtSecuritiesCurrent",
+    "AvailableForSaleSecuritiesCurrent",
+)
+OTHER_SHORT_TERM_INVESTMENTS = "OtherShortTermInvestments"  # its own line, added
+# Counted as current only when the filing tags no current/noncurrent split (KO).
+MARKETABLE_SECURITIES = "MarketableSecurities"
+MARKETABLE_SPLIT = ("MarketableSecuritiesCurrent", "MarketableSecuritiesNoncurrent")
+# Plain "Investments" counts as short-term only when the filing classifies its balance sheet,
+# tags no short/long split, and the line fits in current assets (MA, not insurers).
+INVESTMENTS = "Investments"
+INVESTMENT_SPLITS = (
+    "ShortTermInvestments",
+    "LongTermInvestments",
+    "InvestmentsNoncurrent",
+    "OtherLongTermInvestments",
+)
+ASSETS_CURRENT = "AssetsCurrent"
+MARKETABLE_LINES = frozenset({MARKETABLE_SECURITIES, INVESTMENTS, *SHORT_TERM_INVESTMENTS[1:]})
+
 CHAINS: dict[str, tuple[str, ...]] = {
     "revenue": (
         "Revenues",
@@ -39,6 +101,37 @@ CHAINS: dict[str, tuple[str, ...]] = {
         # after-tax figure under it.
         "ShareBasedCompensation",
     ),
+    "income_tax": ("IncomeTaxExpenseBenefit",),
+    "pretax_income": (
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+    ),
+    "equity": (*EQUITY, *REDEEMABLE_NCI),
+    # Summed concepts list every tag they read; the order doesn't rank them.
+    "debt": (
+        SHORT_TERM_BORROWINGS,
+        *SHORT_TERM_BORROWING_PARTS,
+        *CURRENT_LONG_TERM_DEBT,
+        *NONCURRENT_LONG_TERM_DEBT,
+        DEBT_CURRENT,
+        *FINANCE_LEASES_CURRENT,
+        *FINANCE_LEASES_NONCURRENT,
+        *FINANCE_LEASES_TOTAL,
+        DEBT_TOTAL,
+        LONG_TERM_DEBT_TOTAL,
+        DISPOSAL_GROUP_LIABILITIES,
+    ),
+    "cash_and_short_term_investments": (
+        CASH_AND_INVESTMENTS_TOTAL,
+        *CASH,
+        *SHORT_TERM_INVESTMENTS,
+        OTHER_SHORT_TERM_INVESTMENTS,
+        MARKETABLE_SECURITIES,
+        "MarketableSecuritiesNoncurrent",
+        INVESTMENTS,
+        *INVESTMENT_SPLITS[1:],
+        ASSETS_CURRENT,
+    ),
     "diluted_shares": (
         "WeightedAverageNumberOfDilutedSharesOutstanding",
         "WeightedAverageNumberOfShareOutstandingBasicAndDiluted",
@@ -52,6 +145,11 @@ CHAINS: dict[str, tuple[str, ...]] = {
 NARROWER: dict[str, frozenset[str]] = {
     "diluted_shares": frozenset({"WeightedAverageNumberOfSharesOutstandingBasic"}),
 }
+
+# Concepts measured at a fiscal-year end (balance sheet) rather than over the year.
+INSTANTS = frozenset({"equity", "debt", "cash_and_short_term_investments"})
+# Concepts summed from several tags in one filing rather than picked from a chain.
+SUMMED = frozenset({"equity", "debt", "cash_and_short_term_investments"})
 
 # companyfacts unit per concept; concepts not listed are in USD.
 UNITS: dict[str, str] = {"diluted_shares": "shares"}
@@ -80,4 +178,9 @@ HINTS: dict[str, tuple[str, ...]] = {
     "capex": ("PaymentsToAcquire",),
     "sbc": ("ShareBased", "StockBased"),
     "diluted_shares": ("WeightedAverageNumber",),
+    "income_tax": ("IncomeTax",),
+    "pretax_income": ("BeforeIncomeTaxes",),
+    "equity": ("StockholdersEquity",),
+    "debt": ("Debt", "Borrowings", "CommercialPaper"),
+    "cash_and_short_term_investments": ("Cash", "ShortTermInvestments", "MarketableSecurities"),
 }

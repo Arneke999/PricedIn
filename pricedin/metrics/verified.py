@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Literal
 
-from pricedin.metrics.cash_flow import free_cash_flow
+from pricedin.metrics.cash_flow import free_cash_flow, free_cash_flow_after_sbc
 from pricedin.metrics.margins import operating_margin
 from pricedin.normalize.schema import Fact, Statements
 
@@ -40,6 +40,9 @@ VERIFIED: dict[str, Series] = {
     "capex": Series(("capex",), line_item, "usd"),
     "operating_margin": Series(("revenue", "operating_income"), operating_margin, "ratio"),
     "fcf": Series(("operating_cash_flow", "capex"), free_cash_flow, "usd"),
+    "fcf_after_sbc": Series(
+        ("operating_cash_flow", "capex", "sbc"), free_cash_flow_after_sbc, "usd"
+    ),
     "net_income": Series(("net_income",), line_item, "usd"),
     "sbc": Series(("sbc",), line_item, "usd"),
     "diluted_shares": Series(("diluted_shares",), line_item, "shares"),

@@ -24,6 +24,7 @@ fcf = 73266
 net_income = 132170             # Net income
 sbc = 24953                     # Stock-based compensation expense (cash flows)
 diluted_shares = 12230          # Number of shares used in per share computation, diluted, Consolidated
+fcf_after_sbc = 48313    # 73266 - 24953
 
 [GOOGL."2024-12-31"]
 revenue = 350018
@@ -35,6 +36,7 @@ fcf = 72764
 net_income = 100118
 sbc = 22785
 diluted_shares = 12447
+fcf_after_sbc = 49979    # 72764 - 22785
 
 [COST]
 cik = 909832
@@ -50,6 +52,7 @@ fcf = 9382
 net_income = 9226               # NET INCOME
 sbc = 924                       # Stock-based compensation (cash flows)
 diluted_shares = 444.427        # Shares used in calculation, Diluted: 444,427 thousand as printed
+fcf_after_sbc = 8458     # 9382 - 924
 
 [COST."2025-08-31"]
 revenue = 275235
@@ -61,6 +64,7 @@ fcf = 7837
 net_income = 8099
 sbc = 860
 diluted_shares = 444.803        # 444,803 thousand as printed
+fcf_after_sbc = 6977     # 7837 - 860
 
 [MA]
 cik = 1141391
@@ -77,6 +81,7 @@ fcf = 16433
 net_income = 14968              # Net Income (the only net income line; tagged ProfitLoss, #47)
 sbc = 597                       # Share-based compensation (cash flows)
 diluted_shares = 906            # Diluted weighted-average shares outstanding
+fcf_after_sbc = 15836    # 16433 - 597
 
 [MA."2024-12-31"]
 revenue = 28167
@@ -89,6 +94,7 @@ fcf = 13586
 net_income = 12874
 sbc = 526
 diluted_shares = 927
+fcf_after_sbc = 13060    # 13586 - 526
 
 [GE]
 cik = 40545
@@ -122,6 +128,7 @@ fcf = 5296
 net_income = 13107              # Net Income Attributable to Shareowners of The Coca-Cola Company
 sbc = 279                       # Stock-based compensation expense (cash flows)
 diluted_shares = 4313           # Average Shares Outstanding - Diluted
+fcf_after_sbc = 5017     # 5296 - 279
 
 [KO."2024-12-31"]
 revenue = 47061
@@ -133,3 +140,4 @@ fcf = 4741
 net_income = 10631
 sbc = 286
 diluted_shares = 4320
+fcf_after_sbc = 4455     # 4741 - 286

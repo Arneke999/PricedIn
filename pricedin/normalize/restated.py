@@ -2,7 +2,8 @@
 
 companyfacts repeats a year's value in every later filing that reports it. Only 10-K and
 10-K/A count, only full-year durations, and a filing's value counts only for its own last
-three fiscal years (approximating "primary statements only").
+three fiscal years (approximating "primary statements only"). Balances (instant facts)
+count at fiscal-year ends only, and only for the two year-ends a balance sheet shows.
 """
 
 from __future__ import annotations
@@ -17,6 +18,9 @@ ANNUAL_FORMS = frozenset({"10-K", "10-K/A"})
 ANNUAL_DAYS = range(335, 396)
 # A filing's last 3 fiscal years end within ~2 years of its own year end.
 WINDOW = timedelta(days=800)
+# A balance sheet shows its own year end and the one before; older balances (an equity
+# statement's opening balance) don't count.
+BALANCE_WINDOW = timedelta(days=400)
 # Starts this close together with the same end date are the same fiscal year.
 SAME_START = timedelta(days=7)
 
@@ -31,14 +35,25 @@ def annual(entries: list[dict]) -> Iterator[tuple[Period, dict]]:
             yield period, entry
 
 
+def year_ends(entries: list[dict], fiscal_ends: set[date]) -> Iterator[tuple[Period, dict]]:
+    """Balances at fiscal-year ends (instant facts) from 10-K and 10-K/A filings."""
+    for entry in entries:
+        if entry.get("form") not in ANNUAL_FORMS or "start" in entry:
+            continue
+        end = date.fromisoformat(entry["end"])
+        if end in fiscal_ends and end <= date.fromisoformat(entry["filed"]):
+            yield Period(end, end), entry
+
+
 def filing_key(entry: dict) -> tuple[str, str]:
     """Orders filings by recency: filing date, then accession number."""
     return entry["filed"], entry["accn"]
 
 
-def in_window(end: date, own_end: date) -> bool:
-    """Is `end` one of the last three fiscal years of a filing about year `own_end`?"""
-    return own_end - end <= WINDOW
+def in_window(end: date, own_end: date, balance: bool = False) -> bool:
+    """Is `end` one of the last three fiscal years (or for a balance, the last two
+    year-ends) of a filing about year `own_end`?"""
+    return own_end - end <= (BALANCE_WINDOW if balance else WINDOW)
 
 
 def nominal_year(end: date) -> int:
